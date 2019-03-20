@@ -1,0 +1,82 @@
+from twisted.internet import reactor, stdio
+from twisted.internet.protocol import Protocol, ClientFactory
+from twisted.protocols import basic
+import json
+from server import Payload
+import os
+from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+
+class BotClientProtocol(Protocol):
+    def __init__(self, factory):
+        self.factory = factory
+
+    def dataReceived(self, data):
+        data = json.loads(data)
+
+        msg = create_local_task_message(
+            data['route'],
+            data['data'],
+            data['route_meta']
+        )
+        self.factory.driver.inbox.put(msg, INBOX_SYS_MSG)
+
+        #self.transport.loseConnection()
+
+    def connectionMade(self):
+        print "Connection made {}".format(self.transport.getPeer())
+
+        msg = create_local_task_message(
+            'bd.@md.slave.connect',
+            { 'uuid': self.factory.driver.uuid }
+        )
+
+        #if self.factory.driver:
+        #    data['data']['slave_type_id'] = self.factory.driver.model_id
+
+        self.transport.write(json.dumps(msg))
+
+    def connectionLost(self, s):
+        print "connection lost"
+        self.transport.write("Connection Lost!\r\n")
+        #self.factory.protocols.remove(self)
+
+    def write(self, payload):
+        self.transport.write(payload)
+
+class BotClientFactory(ClientFactory):
+    protocol = BotClientProtocol
+    p = None
+
+    def __init__(self):
+        self.client = None
+
+    def set_driver(self, driver):
+        self.driver = driver
+
+    def send_it(self, payload):
+        if self.p:
+            print "SEND IT"
+            if type(payload) == dict:
+                payload = json.dumps(payload)
+            self.p.write(payload)
+        else:
+            print "PROTOCOL NO GO PID: {}".format(os.getpid())
+
+    def buildProtocol(self, addr):
+        p = BotClientProtocol(self)
+        self.p = p
+        return p
+
+    def startedConnecting(self, connector):
+        destination = connector.getDestination()
+        print "<client> started Connecting destionation: {}".format(destination)
+
+    def clientConnectionLost(self, connector, reason):
+        print "LOST CONNECTION {}".format(reason)
+        connector.connect()
+
+    def clientConnectionFailed(self, connector, reason):
+        self.driver.comms_pulse_cb.stop()
+
+        print "lost failed"
+

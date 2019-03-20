@@ -1,0 +1,5 @@
+{
+    "master_server_ip": "localhost",
+    "master_server_port": 5007,
+    "lib_directory": "/home/den0/Programs/MSystem/BotNetwork1/BN1"
+}
