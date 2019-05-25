@@ -12,8 +12,8 @@ sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
 import bot
-from slaves.access_point import AccessPoint 
+from slaves.access_point.slave import AccessPoint as Slave 
 
+Slave(config).start()
 
-AccessPoint(config).start()
 

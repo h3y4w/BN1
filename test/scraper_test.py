@@ -12,9 +12,9 @@ sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
 import bot
-from slaves.scraper import Scraper 
+from slaves.ig_follower.slave import IGFollower 
 
 
-Scraper(config).start()
+IGFollower(config).start()
 
 
