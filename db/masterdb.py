@@ -5,6 +5,46 @@ from datetime import datetime, timedelta
 import json
 import os
 
+NOTIFY_SLAVE_TYPE_COLS = [
+    'id',
+    'name'
+]
+
+NOTIFY_SLAVE_COLS = [
+    'id',
+    'active',
+    'slave_type_id',
+    'is_ec2'
+]
+
+NOTIFY_TASK_COLS = [
+    'id',
+    'completed',
+    'active',
+    'error',
+    'msg',
+    'job_id',
+    'name',
+    'time_started',
+    'time_completed'
+]
+
+NOTIFY_JOB_COLS = [
+    'id',
+    'stage',
+    'msg',
+    'name',
+    'error',
+    'completed'
+]
+
+NOTIFY_TASK_GROUP_COLS = [
+    'total_cnt',
+    'completed_cnt',
+    'error_cnt'
+]
+
+
 Base = declarative_base()
 
 class SlaveTaskGroup (Base):
@@ -14,10 +54,23 @@ class SlaveTaskGroup (Base):
     completed_cnt = Column(Integer, default=0)
     error_cnt = Column(Integer, default=0)
     total_cnt = Column(Integer, nullable=False)
+    cb_route = Column(String(100), nullable=False)
+    grouped = Column(Boolean, default=False)
 
     def __init__(self, payload):
         self.total_cnt = payload['total_cnt']
         self.job_id = payload['job_id']
+        self.cb_route = payload['cb_route']
+
+class SchedulerGroup(Base):
+    #CPV1 should pull data from this model
+    __tablename__ = 'SchedulerGroup'
+    id = Column(Integer, primary_key=True)
+    schedulers = relationship('Scheduler')
+    name = Column(String(100), nullable=False)
+
+    def __init__(self, payload):
+        self.name = payload['name']
 
 class Scheduler(Base):
     __tablename__ = 'Scheduler'
@@ -26,6 +79,7 @@ class Scheduler(Base):
     run_time = Column(DateTime)
     route = Column(String(100))
     data = Column(Text, default='{}')
+    scheduler_group_id = Column(ForeignKey('SchedulerGroup.id'))
 
     def __init__(self, payload):
         cols = payload.keys()
@@ -108,15 +162,17 @@ class SlaveJob (Base):
     data = Column(Text, default='{}')
 
     name = Column(String(50))
+    created_time = Column(DateTime, nullable=False)
     completed = Column(Boolean, default=False)
     error = Column(Boolean, default=False)
     msg = Column(String(100))
-    stage = Column(String(100), default="Creating...")
+    stage = Column(String(100), default="In queue...")
     tasks = relationship("SlaveTask")
 
     def __init__(self, payload):
         self.name = payload['name']
         cols = payload.keys()
+        self.created_time = datetime.utcnow()
         if 'stage' in cols:
             self.stage = payload['stage']
 
@@ -128,6 +184,7 @@ class SlaveTask (Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(50))
     job_id = Column(ForeignKey('SlaveJob.id'))
+    job_ok_on_error = Column(Boolean, default=False)
 
     task_group_id = Column(ForeignKey('SlaveTaskGroup.id'), nullable=True)
 
@@ -136,7 +193,7 @@ class SlaveTask (Base):
     started = Column(Boolean, default=False) 
     completed = Column(Boolean, default=False)
 
-    msg = Column(String(100))
+    msg = Column(String(100), default="Waiting for avaiable slave")
     error = Column(Boolean, default=False)
 
 
@@ -163,9 +220,10 @@ class SlaveTask (Base):
         cols = payload.keys()
         if 'job_id' in cols:
             self.job_id = payload['job_id']
-
-        if 'task_group_id' in cols:
-            self.task_group_id = payload['task_group_id']
+            if 'job_ok_on_error' in cols:
+                self.job_ok_on_error = payload['job_ok_on_error']
+            if 'task_group_id' in cols:
+                self.task_group_id = payload['task_group_id']
 
     def is_error(self, msg=None):
         self.error = True

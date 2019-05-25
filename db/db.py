@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Float, Text , Boolean
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Float, Text , Boolean, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -27,6 +27,16 @@ class DB (object):
             base.metadata.create_all(self.engine)
             self.session.commit()
 
+    def query_raw(self, raw):
+        sql = text(raw)
+        result = self.session.execute(sql)
+        data = []
+        for row in result:
+            data.append(dict(row))
+        return data
+
+    def get_tables(self):
+        pass
     def get_all(self, model):
         return self.session.query(model).all()
 
@@ -40,7 +50,8 @@ class DB (object):
         return m
 
     def delete(self, m):
-        pass
+        m.delete()
+        self.session.commit()
 
     def to_dict(self, m, cols, serialize=False):
         d = {}
