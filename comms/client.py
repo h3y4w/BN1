@@ -7,12 +7,12 @@ import os
 from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 class BotClientProtocol(Protocol):
+    factory = None
     def __init__(self, factory):
         self.factory = factory
 
     def dataReceived(self, data):
         data = json.loads(data)
-
         msg = create_local_task_message(
             data['route'],
             data['data'],
@@ -60,7 +60,12 @@ class BotClientFactory(ClientFactory):
                 payload = json.dumps(payload)
             self.p.write(payload)
         else:
-            print "PROTOCOL NO GO PID: {}".format(os.getpid())
+            msg = create_local_task_message(
+                '@bd.error',
+                {'type': 'ValueError', 'msg': 'No Protocol', 'die':True},
+            )
+            self.factory.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
+
 
     def buildProtocol(self, addr):
         p = BotClientProtocol(self)
@@ -76,7 +81,15 @@ class BotClientFactory(ClientFactory):
         connector.connect()
 
     def clientConnectionFailed(self, connector, reason):
-        self.driver.comms_pulse_cb.stop()
-
         print "lost failed"
+        self.driver.comms_pulse_cb.stop()
+        msg = create_local_task_message(
+            '@bd.error',
+            {'type': 'ValueError', 'msg': 'Client Connection Failed', 'die':True},
+        )
+        if self.p:
+            if self.p.factory:
+                self.p.factory.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
+
+        raise ValueError("Client Connection Lost")
 
