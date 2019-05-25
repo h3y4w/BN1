@@ -3,17 +3,17 @@ import multiprocessing as multiprocess
 import os
 import Queue
 
-INBOX_SYS_MSG = 0
-INBOX_SYS_BLOCKING_MSG = 1
+INBOX_SYS_CRITICAL_MSG = 0
+INBOX_SYS_MSG = 1
 INBOX_BLOCKING_MSG = 2
 INBOX_TASK1_MSG = 3
 INBOX_TASK2_MSG = 4
 
-OUTBOX_SYS_MSG = 0
+OUTBOX_SYS_MSG = 1
 OUTBOX_TASK_MSG = 1
 
-def create_local_task_message(route, args, route_meta=None):
-    msg = {'route': route, 'data':args}
+def create_local_task_message(route, data, route_meta=None):
+    msg = {'route': route, 'data':data}
     if not route_meta:
         route_meta = {'type': 'default'}
 
@@ -62,8 +62,6 @@ class MPPriorityQueue(object):
 
             except Queue.Empty:
                 pass
-            except Exception as e:
-                print "\n\nMPPriorityQueue.get() ERROR: {}".format(e)
         else:
             priority = 0
             for priority in range(0, self.total_priorities): 
