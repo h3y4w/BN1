@@ -2,7 +2,7 @@
 import json
 import traceback
 import os
-from bot import SlaveDriver, OUTBOX_TASK_MSG
+from drivers.slavedriver import SlaveDriver
 from selenium import webdriver
 import time
 from datetime import datetime
@@ -11,6 +11,7 @@ from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, O
 
 from db import warehousedb
 from db import db
+
 
 
 class WarehouseClerk(SlaveDriver):
@@ -22,6 +23,8 @@ class WarehouseClerk(SlaveDriver):
 
 
             'bd.sd.@WCV1.query': self.bd_sd_WCV1_query,
+
+            'bd.sd.@WCV1.check.table.tmp': self.bd_sd_WCV1_check_table_tmp,
 
             'bd.sd.@WCV1.model.insert': self.bd_sd_WCV1_model_insert,
             'bd.sd.@WCV1.model.update': self.bd_sd_WCV1_model_update,
@@ -47,6 +50,52 @@ class WarehouseClerk(SlaveDriver):
 
         return model
 
+    def bd_sd_WCV1_check_table_tmp (self, data, route_meta):
+        tmp_table = self.get_model_from_table_name(data['table_name'])
+        table_name = data['table_name'].split('_tmp')[0] #cuts out _tmp post-fix
+        table = self.get_model_from_table_name(table_name)
+        rows = self.warehouse_db.session.query(tmp_table).all()
+        reference_rows = []
+        for row in rows:
+            if (row.reference_id):
+                print "REFERENCE ROW ID {} ADDED".format(row.reference_id)
+                reference_rows.append(row)
+            else:
+                info = self.warehouse_db.as_dict(row)
+                print 'info: {}'.format(info)
+                obj = self.warehouse_db.add(table, info)
+                if obj:
+                    self.warehouse_db.delete(row)
+                else:
+                    raise ValueError("Receievd None when adding obj from tmp to main table")
+
+        if reference_rows:
+            cols = reference_rows[0].__table__.columns.keys()
+            #rows = self.warehouse_db.session.query(table).filter(table.id==)
+            ids = [row.reference_id for row in reference_rows]
+
+            rows = self.warehouse_db.session.query(table).filter(table.id.in_(ids)).all() #searches for rows in real table with reference ids from tmp table
+            for row in rows:
+                length = len(reference_rows)
+                for i in xrange(0, length):
+                    if row.id == reference_rows[i].reference_id:
+                        ref = reference_rows.pop(i) 
+                        if i!=0: 
+                            i-=1 #account for pop
+                        length = len(reference_rows)
+                        for col in cols:
+                            if col != 'reference_id':
+                                setattr(row, col, getattr(ref, col))
+
+                        self.warehouse_db.delete(ref)
+                        self.warehouse_db.session.commit()
+
+            for row in reference_rows: #deletes all other reference updates that didnt match"
+                self.warehouse_db.delete(row)
+                self.warehouse_db.session.commit()
+
+
+
     def bd_sd_WCV1_query(self, data, route_meta):
         query = data['query']
         tag = data['tag']
@@ -55,10 +104,23 @@ class WarehouseClerk(SlaveDriver):
         self.taskrunner_send_data_to_tag(tag, tdata)
 
     def bd_sd_WCV1_model_insert(self, data, route_meta):
+        #Add insert options here like
         model = self.get_model_from_table_name(data['table_name'])
         args = data['args']
+
+        ids = []
         for arg in args:
             a = self.warehouse_db.add(model, arg)
+            if a:
+                ids.append(a.id)
+
+        if 'tag' in data.keys():
+            tag = data['tag']
+            self.taskrunner_send_data_to_tag(tag, ids)
+
+        if '_tmp' in data['table_name']:
+            payload = {'table_name': data['table_name']}
+            self.add_global_task('bd.sd.@WCV1.check.table.tmp', payload, 'Copying rows from {} to permanent storage'.format(data['table_name']), job_id=route_meta['job_id'])
 
 
     def bd_sd_WCV1_model_remove(self, data, route_meta):

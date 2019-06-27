@@ -14,7 +14,9 @@ sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
 
-import bot
+#import bot
+print os.getcwd()
+print '---'
 from masters.masterv1 import MasterV1
 
 

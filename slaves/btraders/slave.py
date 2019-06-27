@@ -2,7 +2,7 @@
 import json
 import traceback
 import os
-from bot import SlaveDriver, OUTBOX_TASK_MSG
+from drivers.slavedriver import SlaveDriver
 import time
 from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
@@ -11,8 +11,9 @@ from datetime import datetime
 from dateutil.parser import parse
 from urlparse import urlparse
 
-import sqmonitor_funcs
-
+import trade_functions
+import indicators
+import binance_indicators
 from binance.client import Client
 from binance.websockets import BinanceSocketManager
 
@@ -24,9 +25,12 @@ class BinanceTrader(SlaveDriver):
     def __init__(self, config):
         super(BinanceTrader, self).__init__(config)
         self.add_command_mappings({
-            'bd.sd.@BTV1.helloworld': self.echo,
-            'bd.sd.@SCV1.#echos': self.echos,
+            'bd.sd.@BTV1.echo.job': self.echo,
+            'bd.sd.@BTV1.do.shit': self.do_shit,
+            'bd.sd.@BTV1.done.shit': self.done_shit,
+
             'bd.sd.@BTV1.binance.socket.run': self.bd_sd_BTV1_binance_socket_run,
+            'bd.sd.@BTV1.helloworld': self.bd_sd_BTV1_echo_job,
             'bd.sd.@BTV1.trade.swing': self.bd_sd_BTV1_trade_swing,
             'bd.sd.@BTV1.trade.swing.trader': self.bd_sd_BTV1_trade_swing_trader,
             'bd.sd.@BTV1.get.models': self.bd_sd_BTV1_get_models
@@ -42,6 +46,11 @@ class BinanceTrader(SlaveDriver):
             stream = stream.replace('@', '/')
             #add watchdog here #track threads
             self.taskrunner_send_data_to_tag('bse+'+stream, data)
+
+    def bd_sd_BTV1_echo_job(self, data, route_meta):
+       time.sleep(5)
+       print data
+       print "FINISHED ECHO_JOB"
 
     def bd_sd_BTV1_binance_socket_stop(self, data, route_meta):
         raise NotImplemented
@@ -68,6 +77,7 @@ class BinanceTrader(SlaveDriver):
         keys = conn_keys[idx+1:].split('/')
 
         if keys:
+
             self.bm.start()
             return keys
 
@@ -79,6 +89,25 @@ class BinanceTrader(SlaveDriver):
         raise NotImplemented
 
     def bd_sd_BTV1_trade_swing_trader(self, data, route_meta):
+        kline_g = indicators.Generator()
+        depth_g = indicators.Generator()
+
+        k3s = binance_indicators.Kline_3_soldiers()
+        k3c = binance_indicators.Kline_3_crows()
+        kh1 = binance_indicators.Kline_hammer()
+        khi = binance_indicators.Kline_hammer_inverted()
+
+        #kline_g.add_indicator(k3s, one_to_one=True)
+
+        k3c = kline_g.add_indicator(k3c)
+        khi = kline_g.add_indicator(khi)
+
+        #ir = kline_g.create_relationship(binance_indicators.possibleUptrend, k3c, khi)
+
+        #kline_g.add_indicator(kh1, one_to_one=True)
+
+        depth_g.add_indicator(binance_indicators.FutureDemand(), one_to_one=True)
+
 
         conn_keys = self.binance_socket_run(data['api_key'], data['api_secret'], data['streams'])
         stream_tags = []
@@ -138,6 +167,7 @@ class BinanceTrader(SlaveDriver):
         last_c = None
         ticker = None
         trading_pair_data = {}
+        stream_tags_data = {} 
 
 
         TICKER_PAST_MAX_LENGTH = 60
@@ -145,147 +175,66 @@ class BinanceTrader(SlaveDriver):
 
         while 1:
             for tag in stream_tags:
-                if 'ticker' in tag:
-                    ticker_data = self.taskrunner_inbox_get_tag(tag, get_all=True)
-                    for trd in ticker_data:
-                        pair = trd['stream'].split('@')[0]
+                pair, pair_route = trade_functions.extract_tag_info(tag)
+                if not pair in stream_tags_data.keys():
+                    stream_tags_data[pair] = {}
 
-                        if not pair in trading_pair_data.keys():
-                            trading_pair_data[pair] = {'ticker': {'c': None, 'p': []}, 'depth': {'c': None, 'p':[]}} 
+                if not pair_route in stream_tags_data[pair].keys():
+                    func = None
+                    max_length = 60
+                    obj_key = None
+                    if 'kline' in pair_route:
+                        max_length = 25
+                        func = kline_g.check
+                        obj_key= 'k'
+                    elif 'depth' in pair_route:
+                        func = depth_g.check
 
-                        if not trading_pair_data[pair]['ticker']['c']:
-                            trading_pair_data[pair]['ticker']['c'] = trd
-                            continue
+                    elif 'ticker' in pair_route:
+                        def printLastPrice (td):
+                            print 'Last price: {}'.format(td[0]['c'])
+                        func = printLastPrice
 
-                        if trd['E'] > trading_pair_data[pair]['ticker']['c']['E']: #sets the most current ticker
-                            old_trd = trading_pair_data[pair]['ticker']['c']
-                            trading_pair_data[pair]['ticker']['c'] = trd
-                            trd = old_trd #now its not the most currect trd so it will check to see where it will add in list
-
-                        past = trading_pair_data[pair]['ticker']['p']
-                        idx = 0
-                        for idx in xrange(0, len(past)):
-                            if past[idx]['E'] < trd['E']:
-                                break
-
-                        trading_pair_data[pair]['ticker']['p'].insert(idx, trd)
-
-                        if TICKER_PAST_MAX_LENGTH < len(trading_pair_data[pair]['ticker']['p']):
-                            trading_pair_data[pair]['ticker']['p'].pop()
+                    stream_tags_data[pair][pair_route] = trade_functions.StreamTagData(pair, pair_route, cb_func=func, max_length=max_length, obj_key=obj_key) 
 
 
+                tag_data = self.taskrunner_inbox_get_tag(tag, get_all=True)
+                updated = False
+                YUUPP = None
+                for td in tag_data:
+                    updated = True
+                    stream_tags_data[pair][pair_route].insert(td)
 
-                elif 'depth' in tag:
-                    tags_data = self.taskrunner_inbox_get_tag(tag, get_all=True)
-                    if tags_data:
-                        for td in tags_data:
-                            pair = td['stream'].split('@')[0]
-                            if not pair in trading_pair_data.keys():
-                                trading_pair_data[pair] = {'ticker': {'c': None, 'p': []}, 'depth': {'c': None, 'p':[]}} 
-
-                            if not trading_pair_data[pair]['depth']['c']:
-                                trading_pair_data[pair]['depth']['c'] = td
-                                continue
-
-                            if td['lastUpdateId'] > trading_pair_data[pair]['depth']['c']['lastUpdateId']: #sets the most current ticker
-                                old_td = trading_pair_data[pair]['depth']['c']
-                                trading_pair_data[pair]['depth']['c'] = td
-                                td = old_td #now its not the most currect trd so it will check to see where it will add in list
-
-                            past = trading_pair_data[pair]['depth']['p']
-                            added = False
-                            idx = 0
-                            for idx in xrange(0, len(past)):
-                                if past[idx]['lastUpdateId'] > td['lastUpdateId']:
-                                    break
-
-                            trading_pair_data[pair]['depth']['p'].insert(idx, td)
-
-                            if DEPTH_PAST_MAX_LENGTH < len(trading_pair_data[pair]['depth']['p']):
-                                trading_pair_data[pair]['depth']['p'].pop()
+                if updated:
+                    streams = stream_tags_data[pair].keys()
+                    w = stream_tags_data[pair][pair_route].cb()
+                    if w:
+                        if w==69:
+                            YUUPP = stream_tags_data[pair][pair_route].current
 
 
-                            pair = td['stream'].split('@')[0]
-                            if pair in trading_pair_data.keys():
-                                td = trading_pair_data[pair]['depth']['c']
-                                if td:
-                                    bid_max_amount = 0 
-                                    bid_max_amount_price = 0
+                    if YUUPP:
+                        print "YUUPP: {}".format(YUUPP)
+                    #for s in streams:
+                    #    print '{} len: {}'.format(s, len(stream_tags_data[pair][s].all()))
+                    #print '----------\n'
+                    #if 'kline' in pair_route:
+                    #    ms = ''
+                    #    for td in stream_tags_data[pair][pair_route].all():
+                    #        ms += str(td['k']['t']) + '\n'
+                    #    print ms+'times^'
+                    #    pass
 
-                                    ask_max_amount = 0
-                                    items = []
-                                    for i in xrange(0, len(td['bids'])):
-                                        bid = td['bids'][i]
-                                        items.append({'weight': float(bid[1]), 'value': float(bid[0])})
-                                        ask = td['asks'][i]
-                                        items.append({'weight': float(ask[1]), 'value': float(ask[0])})
-
-                                        if bid_max_amount < float(bid[1]):
-                                            bid_max_amount = float(bid[1])
-                                        if ask_max_amount < float(ask[1]):
-                                            ask_max_amount = float(ask[1])
-
-                                    bar = ''
-                                    #for ask in td['asks']:
-                                    for j in xrange(0, len(td['asks'])): #did it reverse  to have descendidng order
-                                        k = (len(td['asks'])-1)  - j
-                                        ask = td['asks'][k]
-                                        bar = bar +  "{:.7f} = ".format(float(ask[0]), 7)
-                                        for i in xrange(0, int( float(ask[1]) / ask_max_amount * 20)):
-                                            bar = bar+'*'
-                                        bar = bar+' ({})\n'.format(ask[1])
-                            
-                                    avg = calculate_weighted_average(items)
-                                    mom = '-'
-                                    if prev_avg:
-                                        if prev_avg < avg:
-                                            mom = 'I'
-                                        if prev_avg > avg:
-                                            mom = 'D'
-
-                                    c = None
-                                    diff = None
-                                    pred = '-'
-                                    if trading_pair_data[pair]['ticker']['c']:
-                                        c = float(trading_pair_data[pair]['ticker']['c']['c'])
-                                        if avg > float(c):
-                                            pred = 'I'
-                                        if avg < float(c):
-                                            pred = 'D'
-                                        if last_c:
-                                            diff =  (1-last_c/c) * 100
-
-                                    bar = bar +  "\n~~~~~~~~p: {} pred: {} mdir: {} diff: {} mavg: {:.7f}~~~~~~~~~~\n".format(c, pred, mom, diff,avg)
-
-                                    for bid in td['bids']:
-                                        bar = bar + "{:.7f} = ".format(round(float(bid[0]), 7))
-                                        for i in xrange(0, int( float(bid[1]) / bid_max_amount * 25)):
-                                            bar = bar+'*'
-                                        bar = bar+ ' ({})\n'.format(bid[1])
-
-
-               
-
-                                    #if avg > trading_pair_data[pair]['ticker']['c']:
-                                    raise NotImplemented("Add algo")
-
-                                    trading_pair_data[pair]['ticker']['c']
-                                    os.system("clear")
-                                    print "update id: {}".format(td['lastUpdateId']) 
-                                    print "======Depth============="
-                                    print bar + '=----------------------='
-                                    #print len(trading_pair_data[pair]['depth']['p'])
-                                    #print trading_pair_data[pair]['depth']
-                                    prev_avg = avg
-                                    last_c = c
 
 
 
     def bd_sd_BTV1_trade_swing(self, data, route_meta):
-        data = {'pairs': ['bnbbtc'], 'depth': 5}
+        data = {'pairs': ['bnbbtc'], 'depth': 5, 'kline_interval': '1m'}
+
         streams = []
         for pair in data['pairs']:
             streams.append(pair+'@depth'+str(data['depth'])) #stream for depth data
+            streams.append(pair+'@kline_'+str(data['kline_interval']))
             streams.append(pair+'@ticker') #stream for ticker data
 
         query_tag = self.taskrunner_create_address_tag()
@@ -323,14 +272,37 @@ class BinanceTrader(SlaveDriver):
             print "\n\n\nDidnt get response fast enough\n\n\n"
 
 
+    def do_shit(self, data, route_meta):
+        cols = data.keys()
+
+        tag = self.taskrunner_create_address_tag()
+        ps = []
+        for x in xrange(0, 10):
+            p = {}
+            p['invested_amount'] = x*38.31#data['a']
+
+            if 'update' in cols:
+                p['reference_id'] = data['id']
+            ps.append(p)
+        
+        self.insert_WCV1('RCB_tmp', ps, route_meta['job_id'], tag)
+        #d = self.taskrunner_inbox_get_tag(tag, poll=10, delay=1)
+
+    def done_shit(self, data, route_meta):
+        print 'DONE SHIT BITCH'
+
+
     def echo(self, data, route_meta):
+        r = 'bd.sd.@BTV1.do.shit'
+        d={'tasks':[{'a':3},{'a':34},{'a':6}],'cb_route':'bd.sd.@BTV1.done.shit'}
+        self.add_global_task_group(r, d, 'Exctracting and inserting values', route_meta['job_id'])
         time.sleep(1)
         print "1.",
         time.sleep(1)
         print "2.",
         time.sleep(1)
         print "3."
-        print 'AccessPoint.echos > payload: {}'.format(data)
+        print 'AccessPoint.echos > payload: {} & returned: {}'.format(data, d)
 
 
 

@@ -1,10 +1,11 @@
 from twisted.internet import reactor, stdio
+import sys
 from twisted.internet.protocol import Protocol, ClientFactory
 from twisted.protocols import basic
 import json
 from server import Payload
 import os
-from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from mpinbox import create_local_task_message, INBOX_SYS_CRIT_MSG, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 class BotClientProtocol(Protocol):
     factory = None
@@ -18,7 +19,11 @@ class BotClientProtocol(Protocol):
             data['data'],
             data['route_meta']
         )
-        self.factory.driver.inbox.put(msg, INBOX_SYS_MSG)
+        if self.factory:
+            self.factory.driver.inbox.put(msg, INBOX_SYS_MSG)
+
+        #else:
+        #    raise ValueError("client factory is null")
 
         #self.transport.loseConnection()
 
@@ -78,7 +83,10 @@ class BotClientFactory(ClientFactory):
 
     def clientConnectionLost(self, connector, reason):
         print "LOST CONNECTION {}".format(reason)
-        connector.connect()
+
+        #add a grae period before disconnecting
+        #connector.connect()
+        connector.disconnect()
 
     def clientConnectionFailed(self, connector, reason):
         print "lost failed"
@@ -90,6 +98,10 @@ class BotClientFactory(ClientFactory):
         if self.p:
             if self.p.factory:
                 self.p.factory.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
+        
 
-        raise ValueError("Client Connection Lost")
+        connector.disconnect()
+
+        sys.exit(1)
+        #raise ValueError("Client Connection Lost")
 

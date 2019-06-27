@@ -20,9 +20,6 @@ import bot
 from slaves.command_portal.slave import socketio, app 
 os.chdir(exc_dir)
 
-app
-
-folder = "/home/den0/Programs/MSystem/BotNetwork1/BN1/test/dist"
 folder = "/home/den0/Programs/MSystem/BotNetwork1/BN1/test/dist"
 app.static_folder = folder
 app.template_folder = folder

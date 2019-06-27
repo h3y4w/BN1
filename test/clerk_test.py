@@ -11,7 +11,6 @@ os.chdir(config['lib_directory'])
 sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
-import bot
 from slaves.warehouse_clerk.slave import WarehouseClerk
 
 

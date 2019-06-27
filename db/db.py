@@ -50,18 +50,28 @@ class DB (object):
         return m
 
     def delete(self, m):
-        m.delete()
+        self.session.delete(m)
         self.session.commit()
 
-    def to_dict(self, m, cols, serialize=False):
-        d = {}
-        for col in cols:
-            value = getattr(m, col)
-            if serialize:
-                try:
-                    json.dumps([value])
-                except:
-                    value = str(value)
-            d[col] = value
-        return d
+    def as_dict(self, model, cols=[]):
+        if not cols:
+            cols = [col.name for col in model.__table__.columns]
 
+        return {col: getattr(model, col) for col in cols}
+
+    def as_json(self, model, cols=[]):
+        m = self.as_dict(model, cols)
+        return self.to_json(m)
+        
+    def to_json(self, dic):
+        d = {}
+        for col in dic.keys():
+            val = dic[col]
+            try:
+                if type(val) in [str, int, float]:
+                    pass
+                json.dumps([val])
+            except:
+                val = str(val)
+            d[col] = val
+        return d

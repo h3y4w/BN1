@@ -5,6 +5,20 @@ from datetime import datetime, timedelta
 import json
 import os
 
+DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+NOTIFY_SCHEDULER_COLS = [
+    'id',
+    'frequency_min', 
+    'run_time',
+    'route',
+    'data',
+    'scheduler_group_id'
+]
+
+NOTIFY_SCHEDULER_GROUP_COLS = [
+    'id',
+    'name'
+]
 NOTIFY_SLAVE_TYPE_COLS = [
     'id',
     'name'
@@ -17,6 +31,7 @@ NOTIFY_SLAVE_COLS = [
     'is_ec2'
 ]
 
+
 NOTIFY_TASK_COLS = [
     'id',
     'completed',
@@ -24,9 +39,12 @@ NOTIFY_TASK_COLS = [
     'error',
     'msg',
     'job_id',
+    'task_group_id',
     'name',
+    'time_created',
     'time_started',
-    'time_completed'
+    'time_completed',
+    'assigned_slave_id'
 ]
 
 NOTIFY_JOB_COLS = [
@@ -39,18 +57,47 @@ NOTIFY_JOB_COLS = [
 ]
 
 NOTIFY_TASK_GROUP_COLS = [
+    'job_id',
+    'id',
     'total_cnt',
     'completed_cnt',
     'error_cnt'
 ]
 
+NOTIFY_ALERT_COLS = [
+    'id',
+    'msg',
+    'go_to',
+    'viewed',
+    'time'
+]
 
 Base = declarative_base()
+
+class Alert (Base):
+    __tablename__ = 'Alert'
+    id = Column(Integer, primary_key=True)
+    msg = Column(String(100), nullable=False)
+    go_to = Column(String(50), nullable=True)
+    viewed = Column(Boolean, default=False)
+    time = Column(DateTime, nullable=False)
+
+    def __init__(self, payload):
+        self.msg = payload['msg']
+        self.time = datetime.utcnow()
+
+        cols = payload.keys()
+        if 'go_to' in cols:
+            self.go_to = payload['go_to']
+
+        if 'viewed' in cols:
+            self.viewed = payload['viewed']
+
 
 class SlaveTaskGroup (Base):
     __tablename__ = "SlaveTaskGroup"
     id = Column(Integer, primary_key=True)
-    job_id = Column(ForeignKey('SlaveTaskGroup.id'))
+    job_id = Column(ForeignKey('SlaveJob.id'), nullable=False)
     completed_cnt = Column(Integer, default=0)
     error_cnt = Column(Integer, default=0)
     total_cnt = Column(Integer, nullable=False)
@@ -61,6 +108,7 @@ class SlaveTaskGroup (Base):
         self.total_cnt = payload['total_cnt']
         self.job_id = payload['job_id']
         self.cb_route = payload['cb_route']
+        self.job_id = payload['job_id']
 
 class SchedulerGroup(Base):
     #CPV1 should pull data from this model
@@ -76,22 +124,25 @@ class Scheduler(Base):
     __tablename__ = 'Scheduler'
     id = Column(Integer, primary_key=True)
     frequency_min = Column(Integer) # repeats every x minutes 
-    run_time = Column(DateTime)
-    route = Column(String(100))
+    run_time = Column(DateTime, nullable=False)
+    route = Column(String(100), nullable=False)
     data = Column(Text, default='{}')
-    scheduler_group_id = Column(ForeignKey('SchedulerGroup.id'))
+    scheduler_group_id = Column(ForeignKey('SchedulerGroup.id'), nullable=False)
+    executed = Column(Boolean, default=False)
 
     def __init__(self, payload):
+        self.run_time = payload['run_time']
+        self.route = payload['route']
+        self.scheduler_group_id = payload['scheduler_group_id']
+
         cols = payload.keys()
         if 'frequency_min' in cols:
             self.frequency_min = payload['frequency_min']
-        if not 'run_time' in cols:
-            self.run_time = datetime.utcnow() + timedelta(minutes=self.frequency_min)
 
-        self.route = payload['route']
-        if type(payload['data']) == type({}):
-            payload['data'] = json.dumps(payload['data'])
-        self.data = payload['data']
+        if 'data' in cols:
+            if type(payload['data']) == type({}):
+                payload['data'] = json.dumps(payload['data'])
+            self.data = payload['data']
 
 class Slave (Base):
     __tablename__ = 'Slave'
@@ -166,8 +217,9 @@ class SlaveJob (Base):
     completed = Column(Boolean, default=False)
     error = Column(Boolean, default=False)
     msg = Column(String(100))
-    stage = Column(String(100), default="In queue...")
+    stage = Column(String(100), default="Queued")
     tasks = relationship("SlaveTask")
+    send_alert = Column(Boolean, default=True)
 
     def __init__(self, payload):
         self.name = payload['name']
@@ -176,6 +228,8 @@ class SlaveJob (Base):
         if 'stage' in cols:
             self.stage = payload['stage']
 
+        if 'send_alert' in cols:
+            self.send_alert = payload['send_alert']
 
 
 class SlaveTask (Base):
@@ -203,14 +257,14 @@ class SlaveTask (Base):
 
     route = Column(String(100))
     data = Column(Text, default='{}')
-    slave_type_id = Column(ForeignKey('SlaveType.id'), nullable=False)
+    slave_type_id = Column(ForeignKey('SlaveType.id'), nullable=True)
     assigned_slave_id = Column(ForeignKey('Slave.id'))
     assigned_slave = relationship('Slave')
+
 
     def __init__(self, payload):
         print "PAYLOAD: {}".format(payload)
         self.time_created = datetime.utcnow()
-        self.slave_type_id = payload['slave_type_id']
         self.name = payload['name']
         if type(payload['data']) == type({}):
             payload['data'] = json.dumps(payload['data'])
@@ -218,6 +272,13 @@ class SlaveTask (Base):
         self.route = payload['route']
     
         cols = payload.keys()
+        if 'slave_type_id' in cols:
+            self.slave_type_id = payload['slave_type_id']
+        else:
+            self.error = True
+            self.msg = 'Incorrect task route'
+            self.active = False
+
         if 'job_id' in cols:
             self.job_id = payload['job_id']
             if 'job_ok_on_error' in cols:

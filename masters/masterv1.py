@@ -1,7 +1,7 @@
 import os
 import sys
-import bot
-class MasterV1(bot.MasterDriver):
+from drivers.masterdriver import MasterDriver
+class MasterV1(MasterDriver):
     model_id = "MV1"
     def __init__(self, config):
         super(MasterV1, self).__init__(config)

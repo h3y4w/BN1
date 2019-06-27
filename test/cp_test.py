@@ -14,7 +14,6 @@ config['exc_dir'] = exc_dir
 print exc_dir
 print '\n\n'
 
-import bot
 from slaves.command_portal.slave import CommandPortal, app 
 #config['CPV1_debug'] = True #option to run webserver in debug 
 

@@ -69,25 +69,24 @@ class BinanceApiKey(Base):
         if 'label' in payload.keys():
             self.label = payload['label']
 
-'''
+class RCB (Base):
+    __tablename__ = 'RCB'
+    id = Column(Integer, primary_key=True)
+    invested_amount = Column(Float, nullable=False)
+
+    def __init__(self, payload):
+        self.invested_amount = payload['invested_amount']
+
+
 class RCB_tmp (Base):
     __tablename__ = 'RCB_tmp'
     id = Column(Integer, primary_key=True)
-    hyip_id = Column(ForeignKey('HYIP.id', nullable=False))
-    hyip_monitor_id = Column(ForeignKey('HYIPMonitor.id', nullable=False))
+    reference_id = Column(Integer)
+    invested_amount = Column(Float, nullable=False)
 
-    date = Column(DateTime, nullable=False)
-    invested_amounted = Column(Float, nullable=False)
-    username = Column(String(50), nullable=False)
-
-    time_added = Column(DateTime, nullable=False)
-    push = Column(Boolean, default=False)
-    task_id = Column(Integer, nullable=False)
 
     def __init__(self, payload):
-        self.date = payload['date']
         self.invested_amount = payload['invested_amount']
-        self.username = payload['username']
-        self.hyip_id = payload['hyip_id']
-        self.hyip_monitor_id = payload['hyip_monitor_id']
-'''
+        if 'reference_id' in payload.keys():
+            self.reference_id = payload['reference_id']
+

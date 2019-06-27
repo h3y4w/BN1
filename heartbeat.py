@@ -3,6 +3,7 @@ import os
 from Queue import Empty
 from datetime import datetime, timedelta
 from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_SYS_CRITICAL_MSG
+import sys
 
 
 class Heartbeat (object):
@@ -43,8 +44,12 @@ class Heartbeat (object):
                             print "pid {} {} is inactive - killing process".format(name, pid)
                             if self.parent_pid == pid:
                                 print "Main pid died so killing everything"
+                                for p in pids: #kills all others pids before
+                                    if p != pid:
+                                        self.kill_pid(p)
+
                                 self.kill_pid(pid)
-                                break
+                                sys.exit(1)
                             else:
                                 msg = create_local_task_message('@bd.process.kill', {'pid':pid})
                                 self.outbox.put(msg,INBOX_SYS_CRITICAL_MSG)
@@ -80,7 +85,7 @@ class Heartbeat (object):
             if pulse == 'KILLALL':
                 print '\n\n\n'
                 pids = self.pids.keys()
-                print pids
+                print 'KILLING ALL PIDS: {}'.format(pids)
                 print '\n\n'
                 main_pid = None
                 for pid in pids:

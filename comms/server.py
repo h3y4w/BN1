@@ -1,7 +1,6 @@
 from twisted.internet import reactor, protocol
 from datetime import datetime
 import json
-import bot
 from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 
