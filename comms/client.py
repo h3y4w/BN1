@@ -5,7 +5,7 @@ from twisted.protocols import basic
 import json
 from server import Payload
 import os
-from mpinbox import create_local_task_message, INBOX_SYS_CRIT_MSG, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_CRIT_MSG, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 class BotClientProtocol(Protocol):
     factory = None
@@ -13,23 +13,31 @@ class BotClientProtocol(Protocol):
         self.factory = factory
 
     def dataReceived(self, data):
-        data = json.loads(data)
-        msg = create_local_task_message(
-            data['route'],
-            data['data'],
-            data['route_meta']
-        )
-        if self.factory:
-            self.factory.driver.inbox.put(msg, INBOX_SYS_MSG)
-
-        #else:
-        #    raise ValueError("client factory is null")
-
+        try:
+            data = json.loads(data)
+        except Exception as e:
+            print '\n\n\nDATA IS CORRUPT: {}'.format(e)
+            print data
+            print '\n\n\n'
+        else:
+            msg = None
+            try:
+                msg = create_local_task_message(
+                    data['route'],
+                    data['data'],
+                    data['route_meta']
+                )
+            except TypeError as e:
+                print "\n\n\n\nTypeError: {}".format(e)
+                print "error with: {}\n\n".format(data)
+                raise e
+            else:
+                if self.factory:
+                    self.factory.driver.inbox.put(msg, INBOX_SYS_MSG)
         #self.transport.loseConnection()
 
     def connectionMade(self):
         print "Connection made {}".format(self.transport.getPeer())
-
         msg = create_local_task_message(
             'bd.@md.slave.connect',
             { 'uuid': self.factory.driver.uuid }
@@ -67,10 +75,9 @@ class BotClientFactory(ClientFactory):
         else:
             msg = create_local_task_message(
                 '@bd.error',
-                {'type': 'ValueError', 'msg': 'No Protocol', 'die':True},
+                {'type': 'comms.client', 'msg': 'No Protocol', 'die':True},
             )
-            self.factory.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
-
+            self.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
 
     def buildProtocol(self, addr):
         p = BotClientProtocol(self)
@@ -86,7 +93,18 @@ class BotClientFactory(ClientFactory):
 
         #add a grae period before disconnecting
         #connector.connect()
+
+        self.driver.comms_pulse_cb.stop()
+        msg = create_local_task_message(
+            '@bd.error',
+            {'type': 'comms.client', 'msg': 'Client Connection Lost', 'die':True},
+        )
+        if self.p:
+            if self.p.factory:
+                self.p.factory.driver.inbox.put(msg, INBOX_SYS_CRIT_MSG)
         connector.disconnect()
+        sys.exit(1)
+
 
     def clientConnectionFailed(self, connector, reason):
         print "lost failed"

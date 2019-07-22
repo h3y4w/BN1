@@ -4,7 +4,8 @@ import os
 
 config = None 
 exc_dir = os.path.dirname(os.path.abspath(__file__))
-fn = os.path.dirname(os.path.abspath(__file__))+'/master_config.json'
+fn = os.path.dirname(os.path.abspath(__file__))+'/../../configs/master_config.json'
+
 with open(fn, 'r') as f:
     config = json.loads(f.read())
 os.chdir(config['lib_directory'])

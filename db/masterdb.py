@@ -6,6 +6,8 @@ import json
 import os
 
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+
 NOTIFY_SCHEDULER_COLS = [
     'id',
     'frequency_min', 
@@ -14,6 +16,7 @@ NOTIFY_SCHEDULER_COLS = [
     'data',
     'scheduler_group_id'
 ]
+
 
 NOTIFY_SCHEDULER_GROUP_COLS = [
     'id',
@@ -71,7 +74,6 @@ NOTIFY_ALERT_COLS = [
     'viewed',
     'time'
 ]
-
 Base = declarative_base()
 
 class Alert (Base):
@@ -102,13 +104,17 @@ class SlaveTaskGroup (Base):
     error_cnt = Column(Integer, default=0)
     total_cnt = Column(Integer, nullable=False)
     cb_route = Column(String(100), nullable=False)
+    cb_name = Column(String(75), nullable=False)
+    cb_data_tag = Column(String(100), nullable=True)
     grouped = Column(Boolean, default=False)
 
     def __init__(self, payload):
         self.total_cnt = payload['total_cnt']
         self.job_id = payload['job_id']
         self.cb_route = payload['cb_route']
-        self.job_id = payload['job_id']
+        self.cb_name = payload['cb_name']
+        if 'cb_data_tag' in payload.keys():
+            self.cb_data_tag = payload['cb_data_tag']
 
 class SchedulerGroup(Base):
     #CPV1 should pull data from this model
@@ -149,17 +155,34 @@ class Slave (Base):
     id = Column(Integer, primary_key=True)
     slave_type_id = Column(ForeignKey('SlaveType.id'))
     last_pulse = Column(DateTime)
-    is_ec2 = Column(Boolean)
-    active = Column(Boolean)
+    is_ec2 = Column(Boolean, default=False)
+    ec2_instance_id = Column(String(30))
+    active = Column(Boolean, default=True)
+    init = Column(Boolean, default=False)
     uuid = Column(String(36))
     tasks = relationship('SlaveTask')
 
     def __init__(self, payload):
-        if 'slave_type_id' in payload.keys():
+        cols = payload.keys()
+        if 'slave_type_id' in cols:
             self.slave_type_id = payload['slave_type_id']
-        self.is_ec2 = payload['is_ec2']
-        self.uuid = payload['uuid']
-        self.active = True
+
+        if 'is_ec2' in cols:
+            self.is_ec2 = payload['is_ec2']
+            if self.is_ec2:
+                self.ec2_instance_id = payload['ec2_instance_id']
+
+        if 'active' in cols:
+            self.active = payload['active']
+
+        if 'uuid' in cols:
+            self.uuid = payload['uuid']
+
+        if 'last_pulse' in cols:
+            self.last_pulse = payload['last_pulse']
+
+        if 'init' in cols:
+            self.init = payload['init']
 
     def free(self):
         self.active = False
@@ -289,4 +312,7 @@ class SlaveTask (Base):
     def is_error(self, msg=None):
         self.error = True
         self.msg = msg
+
+accessible_models = [Slave, Alert, SlaveTaskGroup, SlaveJob, SlaveTask, SlaveTaskGroup, SchedulerGroup, Scheduler, SlaveType]
+
 

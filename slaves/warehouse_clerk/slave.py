@@ -3,15 +3,13 @@ import json
 import traceback
 import os
 from drivers.slavedriver import SlaveDriver
-from selenium import webdriver
 import time
 from datetime import datetime
-from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 
 from db import warehousedb
 from db import db
-
 
 
 class WarehouseClerk(SlaveDriver):
@@ -32,16 +30,16 @@ class WarehouseClerk(SlaveDriver):
 
             'bd.sd.@WCV1.models.insert': None,
             'bd.sd.@WCV1.models.update': None,
-            'bd.sd.@WCV1.models.remove': None
+            'bd.sd.@WCV1.models.remove': None,
+
+            'bd.sd.@WCV1.models.get.CPV1': self.bd_sd_WCV1_models_get_CPV1
 
         })
 
-        db_fn = os.path.join(self.__exc_dir__, 'warehouse.db')
-        self.warehouse_db = db.DB(db_fn, warehousedb.Base, 'sqlite', create=True)
+        self.warehouse_db = db.DB(config['warehousedb'], warehousedb.Base, config['db_engine'], create=True)
 
     def echo(self, data, route_meta):
         print 'WarehouseClerk.echo > data: {}'.format(data)
-
 
     def get_model_from_table_name(self, table_name):
         model = getattr(warehousedb, table_name)
@@ -102,6 +100,47 @@ class WarehouseClerk(SlaveDriver):
         queried = self.warehouse_db.query_raw(query)
         tdata = {'queried': queried}
         self.taskrunner_send_data_to_tag(tag, tdata)
+    
+    def bd_sd_WCV1_models_get_CPV1(self, data, route_meta):
+        model = self.get_model_from_table_name(data['obj_type'])
+
+        sid = data['sid']
+        uuid = data['uuid']
+        cnt = data.get('page_index')
+        per = data.get('per_page')
+        
+        if not cnt:
+            cnt = 0
+        if not per:
+            per = 30
+
+        obj_type = data['obj_type']
+        obj_args = data.get('obj_args')
+
+        if obj_args:
+            obj_id = obj_args.get('id')
+        
+
+        #args = [getattr(obj_class, key)==value for key, value in obj_args.items()]
+        #.filter(*args)\
+
+        objs = self.warehouse_db.session.query(model)\
+                .offset(cnt)\
+                .limit(per)\
+                .all()
+
+        dicts = [self.warehouse_db.as_json(o) for o in objs]
+        out = {
+            'action': 'data.rows.set',
+            'action_data': dicts,
+            'session_id': sid,
+            'uuid': uuid,
+        }
+        msg = create_local_task_message (
+            'bd.@md.Slave.CPV1.notify',
+            out
+        )
+        self.send_message_to_master(msg)
 
     def bd_sd_WCV1_model_insert(self, data, route_meta):
         #Add insert options here like

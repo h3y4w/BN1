@@ -2,22 +2,36 @@ from botdriver import BotDriver, prnt, OUTBOX_SYS_MSG
 from comms.client import BotClientFactory
 import os
 from twisted.internet import reactor, task
-from mpinbox import create_local_task_message 
+from utils.mpinbox import create_local_task_message 
 import json
 
-from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, INBOX_TASK2_MSG, INBOX_BLOCKING_MSG, INBOX_SYS_CRITICAL_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, INBOX_TASK2_MSG, INBOX_BLOCKING_MSG, INBOX_SYS_CRITICAL_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 from datetime import datetime, timedelta
 
 class SlaveDriver (BotDriver):
-
+    
+    PULSE_MASTER_TIMER = None
     master_server_ip = None 
     master_server_port = None 
     def __init__(self, config):
+
+        slave_key_path = os.path.expanduser('~/.slave_key.json')
+        slave_key_info = None 
+        
+        if os.path.exists(slave_key_path):
+            with open(slave_key_path, 'r') as f:
+                slave_key_info = json.loads(f.read())
+
+        if slave_key_info: #this can pass more auth in future
+            self.uuid = slave_key_info['uuid']
+
         self.master_server_ip = config['master_server_ip']
         self.master_server_port = config['master_server_port']
+        self.PULSE_MASTER_TIMER = datetime.utcnow()
 
         super(SlaveDriver, self).__init__(config)
+
         self.bot_route_header = self.bot_route_header + ".sd.@" + self.model_id
 
 
@@ -26,7 +40,8 @@ class SlaveDriver (BotDriver):
 
             'bd.@sd.task.global.start': self.bd_sd_task_global_start,
             'bd.@sd.task.global.add': self.bd_sd_task_global_add,
-            'bd.@sd.task.global.stop': self.bd_sd_task_global_stop
+            'bd.@sd.task.global.stop': self.bd_sd_task_global_stop,
+
         }
         self.add_command_mappings(maps)
 
@@ -61,7 +76,14 @@ class SlaveDriver (BotDriver):
                                                    route_meta=route_meta)
         self.outbox.put(msg, OUTBOX_SYS_MSG)
     
-    def add_global_task_group(self, route, data, name, job_id, job_ok_on_error=False, route_meta=None):
+    def add_global_task_group(self, route, data, name, job_ok_on_error=False, job_id=None, route_meta=None):
+        raise ValueError("TASK_GROUP IS BROKEN")
+        ######################################
+        ######## routes have to be written to be able to handle it
+        ######## master stores individual task group data with
+        ######### the task groups sending data to master address tag
+        ######## when task group cb func is ran, it pings master with master tag (which stores data) and sends along a new address_tag to itself so that the master forwards it 
+        #######################################################
         if self.RUNNING_GLOBAL_TASK:
             if not job_id:
                 job_id = self.job_id
@@ -124,7 +146,6 @@ class SlaveDriver (BotDriver):
             self.add_local_task('@bd.instance.free', {}, INBOX_SYS_MSG)
 
     def bd_sd_task_global_add(self, data, route_meta):
-
         msg = create_local_task_message(
             'bd.@sd.task.global.start', 
             data,
@@ -138,11 +159,20 @@ class SlaveDriver (BotDriver):
             print "Stopping task id {}".format(self.running_instance_task_id)
             self.bd_instance_free({}, route_meta)
 
-
     def bd_sd_task_remove(self, data, route_meta):
         pass
+
+    def send_pulse_to_master(self):
+        if self.uuid:
+            data = {'uuid': self.uuid}
+            out = create_local_task_message('bd.@md.slave.pulse', data)
+            self.send_message_to_master(out)
 
     def loop(self):
         self.check_inbox()
         self.check_msg_timers()
+        if self.PULSE_MASTER_TIMER < datetime.utcnow():
+            self.send_pulse_to_master()
+            self.PULSE_MASTER_TIMER = datetime.utcnow() + timedelta(seconds=5)
+        
 

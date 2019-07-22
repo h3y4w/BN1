@@ -1,8 +1,10 @@
 from twisted.internet import reactor, protocol
+
 from datetime import datetime
 import json
-from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
+import traceback
 
 class Payload (object):
     def __init__(self, data, code, error):
@@ -21,8 +23,6 @@ class Payload (object):
         )
         return payload
 
-
-
     def dump(self):
         return json.dumps({
             'data': self.data,
@@ -35,27 +35,41 @@ driver = None
 class Echo(protocol.Protocol):
     def __init__(self, factory):
         self.factory = factory
+        self.uuid = None
 
     def connectionMade(self):
         self.connected = True
 
     def connectionLost(self, reason):
         print '</> (Lost {})'.format(self.uuid)
+        if self.uuid in self.factory.connections.keys():
+            #delete uuid from connections
+            del self.factory.connections[self.uuid]
+
         driver.inbox.put(create_local_task_message('bd.@md.slave.lost', {'uuid':self.uuid}),0)
 
     def dataReceived(self, data):
-        data = json.loads(str(data))
-        print '\n\n{}\n'.format(data)
-        if data['route'] == 'bd.@md.slave.connect': #create seperate func
-            self.uuid = data['data']['uuid']
-            self.factory.connections[data['data']['uuid']] = self
-        
-        msg = create_local_task_message(
-            data['route'],
-            data['data'],
-            data['route_meta']
-        )
-        driver.inbox.put(msg, INBOX_SYS_MSG)
+        if not self.uuid:
+            print "\n\nSLAVE IS NOT REGISTER comms.server\n\n"
+            
+        try:
+            data = json.loads(str(data))
+        except Exception as e:
+
+            print '\n\ncomms.server.Excepion: {}\nERROR: {}\n\n'.format(e, data)
+            print traceback.print_exc()
+        else:
+            if data['route'] == 'bd.@md.slave.connect': #create seperate func
+                self.uuid = data['data']['uuid']
+                self.factory.connections[data['data']['uuid']] = self
+            
+            data['route_meta']['origin'] = self.uuid
+            msg = create_local_task_message(
+                data['route'],
+                data['data'],
+                data['route_meta']
+            )
+            driver.inbox.put(msg, INBOX_SYS_MSG)
 
     def forward(self, data):
         if self.connected:

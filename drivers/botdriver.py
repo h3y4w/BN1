@@ -1,4 +1,3 @@
-import dill
 import multiprocessing #as multiprocessing
 #from Queue import PriorityQueue, Queue
 import Queue
@@ -11,10 +10,10 @@ import json
 import uuid
 
 import traceback
-from mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, INBOX_TASK2_MSG, INBOX_BLOCKING_MSG, INBOX_SYS_CRITICAL_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, INBOX_TASK2_MSG, INBOX_BLOCKING_MSG, INBOX_SYS_CRITICAL_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
-from mpinbox import MPPriorityQueue, create_local_task_message 
-from heartbeat import Heartbeat, Pulse
+from utils.mpinbox import MPPriorityQueue, create_local_task_message 
+from utils.heartbeat import Heartbeat, Pulse
 
 from twisted.internet import reactor, task
 
@@ -23,8 +22,12 @@ from operator import itemgetter
 driver = None
 def prnt(reason):
     #USE THIS FUNCTION FOR FILE LOGGING
+    print 'ERROR!!!!'
     print reason
     print reason.printTraceback()
+    print '~~~~~~~~~~~~~~~~~~~~~\n'
+    print traceback.format_exc()
+    print '====================='
 
 def dead_process_cb(route, data):
     if route:
@@ -58,6 +61,7 @@ class BotDriver(object):
     taskrunner_idc = 0
     task_id = 0
     job_id = 0
+    uuid = None
 
     def __init__(self, config):
         self.__exc_dir__ = config['exc_dir']
@@ -79,8 +83,8 @@ class BotDriver(object):
 
             '@bd.taskrunner.inbox.add': self.bd_taskrunner_inbox_add
         }
-
-        self.uuid = str(uuid.uuid1())
+        if not self.uuid:
+            self.uuid = self.create_bot_uuid() 
 
         self.msg_timers = [] 
 
@@ -117,11 +121,15 @@ class BotDriver(object):
         self.add_local_task('@bd.error', data, INBOX_SYS_CRITICAL_MSG)
 
 
+    def create_bot_uuid(self):
+        return str(uuid.uuid1())
+
     def send_msg(self, msg, priority):
+        print "SENDING MSG!!"
         self.outbox.put(msg, priority)
 
     def send_message_to_master(self, msg, priority=OUTBOX_TASK_MSG):
-        self.outbox.put(msg, priortiy)
+        self.outbox.put(msg, priority)
 
     def send_message_to(self, uuid, msg, priority=OUTBOX_TASK_MSG):
         data = {'uuid': uuid, 'data': msg}
@@ -242,7 +250,6 @@ class BotDriver(object):
 
     def bd_error(self, data, route_meta):
         keys = data.keys()
-
         error_msg = 'Error type: {} -> {}'.format(data['type'], data['msg'])
 
         if 'die' in keys and data['die']:
@@ -321,6 +328,7 @@ class BotDriver(object):
         ob.addErrback(prnt)
 
     def init_mailbox(self, manager):
+        self.manager = manager
         self.inbox = MPPriorityQueue(self.INBOX_PRIORITIES, manager=manager)
         self.outbox = MPPriorityQueue(self.OUTBOX_PRIORITIES, manager=manager)
         self.heartbeat_inbox = MPPriorityQueue(1, manager=manager)
@@ -358,12 +366,14 @@ class BotDriver(object):
         return error, msg
 
 
-    def router_msg_process(self, msg):
-        route_meta = {'type': 'default'}
+    def router_msg_process(self, msg, origin=None):
+        if not origin:
+            origin = '.'
+
+        route_meta = {'type': 'default', 'origin': origin}
 
         if 'route_meta' in msg.keys():
             route_meta = msg['route_meta']
-
 
             cols = route_meta.keys()
             if not 'type' in cols:
@@ -499,7 +509,7 @@ class BotDriver(object):
                 if tag[0:3] == '###':
                     return tag.split('@')[1]
         except:
-            pass
+            raise ValueError("SOMETHING WRONG taskrunner_address_tag: {}".format(tag))
 
     def taskrunner_create_address_tag(self):
         #in the future when task id is assigned to current self, this func can be created by local tasks

@@ -7,6 +7,115 @@ import os
 
 Base = declarative_base()
 
+class TicketGroup (Base):
+    __tablename__ = 'TicketGroup'
+    id = Column(Integer, primary_key=True)
+
+    qr_code_url = Column(String(250), nullable=False)
+    confirmation_code = Column(String(150), nullable=False)
+    event_date = Column(DateTime, nullable=False)
+    cnt = Column(Integer, nullable=False)
+
+    bot_email = Column(String(100), nullable=False)
+    purchase_time = Column(DateTime, nullable=False)
+
+    ticket_drop_id = Column(ForeignKey('TicketDrop.id'), nullable=True)
+    ticket_order_id = Column(ForeignKey('TicketOrder.id'), nullable=True)
+    active = Column(Boolean, default=True)
+
+    def __init__(self, payload):
+        self.bot_email = payload['bot_email']
+        self.confirmation_code = payload['confirmation_code']
+        self.purchase_time = payload['purchase_time']
+        self.qr_code_url = payload['qr_code_url']
+        self.purchase_time = payload['purchase_time']
+        self.event_time = payload['event_time']
+        self.cnt = payload['cnt']
+
+
+class TicketOrder (Base):
+    __tablename__ = 'TicketOrder'
+
+    id = Column(Integer, primary_key=True)
+    purchase_time = Column(DateTime, nullable=False)
+    email = Column(String(100), nullable=False)
+    phone_number = Column(String(20))
+    tickets = relationship('TicketGroup', backref='drop') #lazy?
+    total_amount = Column(Integer, nullable=True)
+
+    def __init__(self, payload):
+        self.purchase_time = datetime.utcnow() 
+        self.email = payload['email']
+        self.total_amount = payload['total_amount']
+        
+        cols = payload.keys()
+        if 'phone_number' in cols:
+            self.phone_number = payload['phone_number']
+        if 'purchase_time' in cols:
+            self.purchase_time = payload['purchase_time']
+
+
+
+class PrepaidCardUser (Base):
+    __tablename__ = 'PrepaidCardUser'
+    id = Column(Integer, primary_key=True)
+
+    first_name = Column(String(25), nullable=False)
+    last_name = Column(String(25), nullable=False)
+
+    street_address = Column(String(50), nullable=False)
+    zipcode_address = Column(Integer, nullable=False)
+    city_address = Column(String(25), nullable=False)
+    state_address = Column(String(25), nullable=False)
+
+    number = Column(String(20), nullable=False)
+    security_code = Column(String(4), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    balance = Column(Integer, nullable=False)
+    active = Column(Boolean, default=True)
+
+    def __init__(self, payload):
+        self.number = payload['number']
+        self.security_code = payload['security_code']
+        self.year = payload['year']
+        self.month = payload['month']
+        self.balance = payload['balance']
+
+class TicketDropType (Base):
+    __tablename__ = 'TicketDropType'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), nullable=False)
+    days_in_advance = Column(Integer, nullable=False)
+    grace_days = Column(Integer, nullable=False)
+
+
+    def __init__(self, payload):
+        self.name = payload['name']
+        self.days_in_advance = payload['days_in_advance']
+        self.grace_days = payload['grace_days']
+
+class TicketDrop (Base):
+    __tablename__ = 'TicketDrop'
+    id = Column(Integer, primary_key=True)
+    unlock_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+
+    ticket_drop_type_id = Column(ForeignKey('TicketDropType.id'), nullable=False)
+    price_multiplier = Column(Float, default=1.0)
+    tickets = relationship('TicketGroup') #lazy?
+
+
+    def __init__(self, payload):
+        self.unlock_date = payload['unlock_date']
+        self.end_date = payload['end_date']
+        self.ticket_drop_type_id = payload['ticket_drop_type_id']
+        
+        cols = payload.keys()
+        if 'price_multiplier' in cols:
+            self.price_multiplier = payload['price_multiplier']
+
+
 class ModelTest(Base):
     __tablename__ = 'ModelTest'
     id = Column(Integer, primary_key=True)

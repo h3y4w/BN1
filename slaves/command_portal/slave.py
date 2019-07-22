@@ -1,7 +1,7 @@
 from drivers.slavedriver import SlaveDriver
-from mpinbox import MPPriorityQueue, create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import MPPriorityQueue, create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_from_directory 
 from flask_socketio import SocketIO, join_room, emit
 
 import requests
@@ -14,21 +14,21 @@ import time
 from datetime import datetime
 driver = None
 
-folder = "/home/den0/Programs/MSystem/BotNetwork1/BN1/test/dist"
+sym_dist = os.path.join(os.getcwd(), "dist_sym")
 
 app = Flask(__name__,
-            template_folder=folder,
-            static_folder=folder
+           template_folder=sym_dist,
+            static_folder=sym_dist
            )
-
 socketio = SocketIO(app)
-last_update =None#datetime.utcnow() 
+last_update = 0 
 uuid = None
 
 clients = {}
 
+#add authentication from master
 @app.route('/data/send', methods=['POST'])
-def data_send():
+def data_send ():
     global last_update
     data = request.get_json(force=True)
 
@@ -36,22 +36,33 @@ def data_send():
     if 'sid' in data.keys():
         session_id = data['sid']
 
-    last_update = data['last_update'] #datetime.utcnow()
+        if data.get('last_update'):
+            if data['last_update'] > last_update:
+                last_update = data['last_update'] #datetime.utcnow()
     r = {'success': False}
     if data:
         print "EMITTING update{} @ {}\n".format(last_update, data['channel'])
-        #emit('pong', {'last_update': last_update}, namespace='/', broadcast=True)
         if session_id:
             print "EMMITING TO :{}".format(session_id)
             emit('data_in', data, namespace='/', room=session_id)
         else:
+            print "EMMITING TO ALL"
             emit('data_in', data, namespace='/', broadcast=True)
 
         r['success'] = True
     else:
         print "EMITTING NOT: {}\n".format(data)
+    return str(r)
 
-    return json.dumps(r)
+@app.route('/dist/css/<path:filename>')
+def return_css(filename):
+    path = os.path.join(sym_dist, 'css/')
+    return send_from_directory(path, filename)
+
+@app.route('/dist/js/<path:filename>')
+def return_js(filename):
+    path = os.path.join(sym_dist, 'js/')#, filename)
+    return send_from_directory(path, filename)
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -60,37 +71,36 @@ def catch_all(path):
 
 @socketio.on('forward')
 def on_forward(data):
-
     msg = create_local_task_message('bd.@md.Slave.CPV1.forwarded', data)
     driver.send_msg(msg, 0)
-
     print "\n*******\nFORWARD DATA: {}".format(data)
 
 @socketio.on('pinger')
 def on_pinger(data):
     global last_update
-    print "\n*******************\nPINGED: {}"#.format(last_update)
+    print "\n*******************PINGED LAST_UPDATE: {}".format(last_update)
     emit('ponger', {'last_update': last_update}, namespace='/', broadcast=True)
-    #dirver.send_msg(create_local_task_message('@bd.echo', {'ping':'pong'}), INBOX_SYS_MSG)
 
-    #inbox.put(create_local_task_message('bd.sd.@CPV1.grace', data), INBOX_SYS_MSG)
+@socketio.on('get/warehouse')
+def on_get_warehouse(data):
+    global uuid
+    data['uuid'] = uuid
+    data['sid'] = request.sid
 
-'''
+    driver.add_global_task('bd.sd.@WCV1.models.get.CPV1', data, 'Getting rows')
 
-
-
-COME HERE AND FIX THIS
-
-getall needs to get session id and pass it to sendall
-notify_cpv1 needs to have a uuid and session id argument
-
-
-In the future change session_id to a name that can either be session_id or room_id (connection_id?)
-
-'''
+@socketio.on('get')
+def on_get(data):
+    global uuid
+    data['uuid'] = uuid
+    data['sid'] = request.sid
+    msg = create_local_task_message('bd.@md.Slave.CPV1.get.objs', data)
+    driver.send_msg(msg, 0)
 
 @socketio.on('getall')
 def on_getall(data):
+    emit('set_last_update', {'last_update':last_update}, namespace='/', room=request.sid)
+
     global uuid
     d = { 'uuid': uuid, 'sid': request.sid} 
     msg = create_local_task_message('bd.@md.Slave.CPV1.sendall', d)
@@ -102,27 +112,20 @@ class CommandPortal(SlaveDriver):
 
     def __init__(self, config):
         super(CommandPortal, self).__init__(config)
-        print "\n\nDist folder is setup by hardcoded method line 10"
-        #folder = "/home/den0/Programs/MSystem/BotNetwork1/BN1/test/dist"
-
-        #static_path = os.path.join(self.__exc_dir__, "dist/static")
-        #template_path = os.path.join(self.__exc_dir__, "dist")
-
-        #static_path = folder
-        #template_path = folder
-
-        #app.static_folder = static_path
-        #app.template_folder = template_path
-        #app.static_url_path = folder
+        
+        #creates symbol directory to template
+        if os.path.exists(sym_dist):
+            os.remove(sym_dist)
+        os.symlink(config['dist_directory'], sym_dist) 
 
         self.config = config
-
 
         self.add_command_mappings({
             'bd.sd.@CPV1.grace': self.grace,
             'bd.sd.@CPV1.server.run': self.bd_sd_CPV1_server_run,
             'bd.sd.@CPV1.data.request.cb': self.bd_sd_CPV1_data_request_cb,
-            'bd.sd.@CPV1.data.send': self.bd_sd_CPV1_data_send
+            'bd.sd.@CPV1.data.send': self.bd_sd_CPV1_data_send,
+            'bd.sd.@CPV1.set.last-update-id': self.bd_sd_CPV1_set_lastupdateid
         })
 
         self.server_host = '0.0.0.0'
@@ -139,6 +142,11 @@ class CommandPortal(SlaveDriver):
         global driver
         driver = self
 
+    def bd_sd_CPV1_set_lastupdateid(self, data, route_meta):
+        global last_update
+        last_update = data['last_update']
+
+
     def bd_sd_CPV1_data_send(self, data, route_meta):
         action = data['action'] #triggered route
         session_id = data['sid']
@@ -146,21 +154,37 @@ class CommandPortal(SlaveDriver):
             'alert.add': 'SET_ALERT',
             'alert.delete': 'DELETE_ALERT',
             'alerts.add': 'SET_ALERTS',
+            'alerts.delete': 'DELETE_ALERTS',
             'scheduler.add': 'SET_SCHEDULER',
             'schedulers.add': 'SET_SCHEDULERS',
+            'scheduler.delete': 'DELETE_SCHEDULER',
+            'schedulers.delete': 'DELETE_SCHEDULERS',
             'scheduler.group.add': 'SET_SCHEDULER_GROUP',
             'scheduler.groups.add': 'SET_SCHEDULER_GROUPS',
+            'scheduler.group.delete': 'DELETE_SCHEDULER_GROUP',
+            'scheduler.groups.delete': 'DELETE_SCHEDULER_GROUPS',
             'slave.add': 'SET_SLAVE',
             'slaves.add': 'SET_SLAVES',
             'slave.type.add': 'SET_SLAVE_TYPE',
             'slave.types.add': 'SET_SLAVE_TYPES',
             'task.add': 'SET_TASK',
             'tasks.add': 'SET_TASKS',
+            'task.delete': 'DELETE_TASK',
+            'tasks.delete': 'DELETE_TASKS',
             'job.add': 'SET_JOB',
             'jobs.add': 'SET_JOBS',
-            'taskgroup.add': 'SET_TASK_GROUP',
-            'taskgroups.add': 'SET_TASK_GROUPS'
-
+            'job.delete': 'DELETE_JOB',
+            'jobs.delete': 'DELETE_JOBS',
+            'task.group.add': 'SET_TASK_GROUP',
+            'task.groups.add': 'SET_TASK_GROUPS',
+            'task.group.delete': 'DELETE_TASK_GROUP',
+            'task.groups.delete': 'DELETE_TASK_GROUPS',
+            'data.rows.set': 'SET_ROWS',
+            'data.row.set': 'SET_ROW',
+            'data.row.update': 'UPDATE_ROW',
+            'data.rows.update': 'UPDATE_ROWS',
+            'data.row.delete': 'DELETE_ROW',
+            'data.rows.delete': 'DELETE_ROWS'
         }
         try:
             data['channel'] = m[action]
@@ -168,8 +192,6 @@ class CommandPortal(SlaveDriver):
             self.report_error("CPV1 Data send", 'Action key not in dict: {}'.format(e))
 
         r = requests.post('http://{}:{}{}'.format(self.server_host, self.server_port, '/data/send'), data=json.dumps(data))
-
-        print "DATA SEND RESP: {}".format(r)
 
     def grace(self):
         raise NotImplemented
@@ -192,9 +214,10 @@ class CommandPortal(SlaveDriver):
             time.sleep(8)
 
     def bd_sd_CPV1_server_run(self, data, route_meta):
-
-
         #Add to to watchdogs to be deleted
+        msg = create_local_task_message('bd.@md.CPV1.get.last-update-id',{})
+        self.send_message_to_master(msg)
+
         global uuid
         uuid = self.uuid
         pid = os.getpid()
