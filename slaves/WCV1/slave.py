@@ -12,10 +12,10 @@ from db import warehousedb
 from db import db
 
 
-class WarehouseClerk(SlaveDriver):
+class WCV1(SlaveDriver):
     model_id = 'WCV1'
     def __init__(self, config):
-        super(WarehouseClerk, self).__init__(config)
+        super(WCV1, self).__init__(config)
         self.add_command_mappings({
             'bd.sd.@WCV1.echo': self.echo,
 
@@ -39,6 +39,7 @@ class WarehouseClerk(SlaveDriver):
         self.warehouse_db = db.DB(config['warehousedb'], warehousedb.Base, config['db_engine'], create=True)
 
     def echo(self, data, route_meta):
+        time.sleep(15)
         print 'WarehouseClerk.echo > data: {}'.format(data)
 
     def get_model_from_table_name(self, table_name):
@@ -106,13 +107,13 @@ class WarehouseClerk(SlaveDriver):
 
         sid = data['sid']
         uuid = data['uuid']
-        cnt = data.get('page_index')
-        per = data.get('per_page')
+        cnt = data.get('cnt')
+        per = data.get('per')
         
         if not cnt:
             cnt = 0
-        if not per:
-            per = 30
+        if not per or per > 30:
+            per = 10 
 
         obj_type = data['obj_type']
         obj_args = data.get('obj_args')
@@ -123,9 +124,17 @@ class WarehouseClerk(SlaveDriver):
 
         #args = [getattr(obj_class, key)==value for key, value in obj_args.items()]
         #.filter(*args)\
+        
+        row_cnt = self.warehouse_db.session.query(model).count()
+        offset = cnt*per
+        print "\n\nPER: {}".format(per)
+        print "CNT: {}".format(cnt)
+        print "offset: {}".format(offset)
+        print "========================\n\n"
+        print "ROW_CNT: {}".format(row_cnt)
 
         objs = self.warehouse_db.session.query(model)\
-                .offset(cnt)\
+                .offset(offset)\
                 .limit(per)\
                 .all()
 
@@ -136,11 +145,25 @@ class WarehouseClerk(SlaveDriver):
             'session_id': sid,
             'uuid': uuid,
         }
+        out1 = {
+            'action': 'data.rows.cnt.set',
+            'action_data': {'cnt': row_cnt},
+            'session_id': sid,
+            'uuid': uuid
+        }
+
         msg = create_local_task_message (
             'bd.@md.Slave.CPV1.notify',
             out
         )
+        msg1 = create_local_task_message (
+            'bd.@md.Slave.CPV1.notify',
+            out1
+        )
+
         self.send_message_to_master(msg)
+        self.send_message_to_master(msg1)
+
 
     def bd_sd_WCV1_model_insert(self, data, route_meta):
         #Add insert options here like

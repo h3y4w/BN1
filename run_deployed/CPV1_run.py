@@ -13,6 +13,6 @@ if not config:
 os.chdir(config['lib_directory'])
 sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
-from slaves.WCV1.slave import WCV1
-WCV1(config).start()
+from slaves.CPV1.slave import CPV1
+CPV1(config).start()
 

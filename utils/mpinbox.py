@@ -14,12 +14,15 @@ INBOX_TASK2_MSG = 4
 OUTBOX_SYS_MSG = 1
 OUTBOX_TASK_MSG = 1
 
-def create_local_task_message(route, data, route_meta=None):
+def create_local_task_message(route, data, route_meta=None, origin=None):
     msg = {'route': route, 'data':data}
     if not route_meta:
         route_meta={'type': 'default'}
 
+    if origin:
+        route_meta['origin'] = origin
     msg['route_meta'] = route_meta
+
     return msg 
 
 
@@ -53,7 +56,7 @@ class MPPriorityQueue(object):
         for i in range(0, total_priorities):
             self.queues.append(obj())
 
-    def get(self, priority=None, remove=True):
+    def get(self, priority=None, remove=True, get_priority=False):
         item = None
         if (priority != None):
             try:
@@ -69,6 +72,9 @@ class MPPriorityQueue(object):
                 item = self.get(priority, remove=remove)
                 if item:
                     break
+        if get_priority:
+            return item, priority
+
         return item
 
     def put(self, item, priority):

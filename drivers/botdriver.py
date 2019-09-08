@@ -62,6 +62,7 @@ class BotDriver(object):
     task_id = 0
     job_id = 0
     uuid = None
+    running_instance_pid = None
 
     def __init__(self, config):
         self.__exc_dir__ = config['exc_dir']
@@ -74,6 +75,7 @@ class BotDriver(object):
             '@bd.process.kill': self.bd_process_kill,
             '@bd.watchdog.launch': self.bd_watchdog_launch,
             '@bd.heartbeat.pulse.send': self.bd_heartbeat_pulse_send,
+            '@bd.outbox.add.front': self.bd_outbox_add_front,
 
             '@bd.die': self.bd_die,
 
@@ -128,12 +130,12 @@ class BotDriver(object):
         print "SENDING MSG!!"
         self.outbox.put(msg, priority)
 
-    def send_message_to_master(self, msg, priority=OUTBOX_TASK_MSG):
-        self.outbox.put(msg, priority)
 
     def send_message_to(self, uuid, msg, priority=OUTBOX_TASK_MSG):
         data = {'uuid': uuid, 'data': msg}
-        out = create_local_task_message('bd.@md.bot.message.send', data)
+        out = create_local_task_message('bd.@md.bot.message.send', data, origin=uuid)
+        print "OUT MSG: {}".format(out)
+        print "outbox obj:{}".format(self.outbox)
         self.outbox.put(out, priority)
 
     def split_array(self, arr, size):
@@ -152,18 +154,19 @@ class BotDriver(object):
         if 'task_id' in keys:
             self.task_id = route_meta['task_id']
             
-            if 'job_id' in keys:
-                self.job_id = route_meta['job_id']
+        if 'job_id' in keys:
+            self.job_id = route_meta['job_id']
 
         func(data, route_meta)
         msg = create_local_task_message('@bd.instance.free', {})
         self.inbox.put(msg, INBOX_SYS_MSG)
 
     @staticmethod
-    def create_global_task_group_message(route, data, name, job_id, job_ok_on_error=False, route_meta=None):
+    def create_global_task_group_message(route, data, name, job_id, job_ok_on_error=False, retry_cnt=None, route_meta=None):
         if not route_meta:
             route_meta = {
-                'type': 'default'
+                'type': 'default',
+                'job_id': job_id
             }
         msg = {
             'route': 'bd.@md.slave.task.group.add',
@@ -173,10 +176,13 @@ class BotDriver(object):
         msg['data']['route'] = route
         msg['data']['name'] = name
         msg['data']['job_id'] = job_id
+        if retry_cnt:
+            msg['data']['retry_cnt'] = retry_cnt
+
         return msg
 
     @staticmethod
-    def create_global_task_message(route, data, name, parent_task_id=None, task_group_id=None, job_id=None, job_ok_on_error=False, route_meta=None):
+    def create_global_task_message(route, data, name, parent_task_id=None, task_group_id=None, job_id=None, job_ok_on_error=False, retry_cnt=None, route_meta=None):
         if not route_meta:
             route_meta = {
                 'type': 'default'
@@ -207,6 +213,9 @@ class BotDriver(object):
             msg['data']['task_chainer'] = {}
             msg['data']['task_chainer']['parent_task_id'] = parent_task_id
 
+        if retry_cnt:
+            msg['data']['task_data']['retry_cnt'] = retry_cnt
+
         return msg
 
     def add_local_task(self, route, data, priority=INBOX_TASK1_MSG, route_meta=None):
@@ -231,6 +240,9 @@ class BotDriver(object):
         model_id = route[route.find('@')+1:].split('.')[0]
         return model_id
 
+    def bd_outbox_add_front(self, data, route_meta):
+        pass
+
     def bd_echo(self, data, route_meta):
         print "__\n<BotDriver Echo>\n{}\n___".format(data)
 
@@ -252,17 +264,18 @@ class BotDriver(object):
         keys = data.keys()
         error_msg = 'Error type: {} -> {}'.format(data['type'], data['msg'])
 
-        if 'die' in keys and data['die']:
+        if data.get('die'):
             self.bd_die({'dmsg': error_msg}, route_meta)
 
-        print "\n\n\nERROR\n--------\n{}\n\n".format(error_msg)
+        print "\n\n\nbd.err\n--------\n{}\n\n".format(error_msg)
         
     def bd_comms_launch(self, data, route_meta):
         self.comms()
 
     def bd_instance_free(self, data, route_meta):
         print 'Freeing instance... now'
-        self.bd_process_kill({'pid': self.running_instance_pid}, route_meta)
+        if self.running_instance_pid:
+            self.bd_process_kill({'pid': self.running_instance_pid}, route_meta)
 
         self.running_instance = False 
         self.running_instance_job_id = None 
@@ -324,8 +337,13 @@ class BotDriver(object):
             self.outbox_cb.stop()
 
         self.outbox_cb = task.LoopingCall(self.check_outbox)
-        ob = self.outbox_cb.start(.1, now=True)
-        ob.addErrback(prnt)
+        ob = self.outbox_cb.start(.1, now=False)
+
+        def handle_error (reason):
+            self.report_error('bd.outbox', str(reason))
+
+
+        ob.addErrback(handle_error)
 
     def init_mailbox(self, manager):
         self.manager = manager
@@ -334,37 +352,63 @@ class BotDriver(object):
         self.heartbeat_inbox = MPPriorityQueue(1, manager=manager)
         self.taskrunner_inbox = MPPriorityQueue(1, manager=manager)
 
-        self.init_outbox_callback()
+        #self.init_outbox_callback()
 
 
     def check_outbox(self):
-        msg = self.outbox.get()
-        if (msg):
-            print "___\n<BotDriver Outbox {}>\n{}\n___".format(os.getpid(), msg)
-            if self.factory:
-                self.factory.send_it(msg)
-            else:
-                self.add_local_task('@bd.die', {}, INBOX_SYS_CRITICAL_MSG)
-                self.report_error('bd.comms', 'BotDriver Comms factory is null: {}'.format(msg['route']), kill=True)
+        err_msg = None 
+        try:
+            msg = self.outbox.get()
+            if (msg):
+                if self.BOT_TYPE == "MASTER":
+                    if not msg['data']['route'] == 'bd.sd.@CPV1.data.send':
+                        print "___\n<BotDriver Outbox {}>\n{}\n___".format(os.getpid(), msg)
+                    else: 
+                        print "___\n<BotDriver Outbox action: {}>___".format(msg['data']['data']['action'])
+
+                else:
+                        print "___\n<BotDriver Outbox {}>\n{}\n___".format(os.getpid(), msg)
+
+
+                if self.factory:
+                    self.factory.send_it(msg)
+                else:
+                    err_msg = 'BotDriver Comms factory is null: {}'.format(msg['route'])
+        except Exception as e:
+            err_msg = str(e)
+            print traceback.format_exc()
+
+
+        finally:
+            if err_msg:
+                self.report_error('bd.comms', err_msg, kill=True)
 
 
     def router(self, route, data, route_meta):
         error = True
-        msg = 'Uncaught Error'
+        msg = 'Uncaught Error!'
         try:
             resp = self.command_mappings[route](data, route_meta)
+        
+        except KeyError as e:
+            if route == str(e):
+                msg = 'Route "{}" does not exist'.format(route)
+                self.report_error('bd.router.err', msg)
+            else:
+                msg = "KeyError issue in code: '{}'".format(e)
+                print traceback.print_exc()
+                self.report_error('bd.router.unk_err', msg)
 
         except Exception as e:
             msg = str(e)
             print traceback.print_exc()
-            self.report_error('Unknown', msg)
+            self.report_error('bd.router.unk_err', msg)
 
         else:
             error = False
             msg = None
         
         return error, msg
-
 
     def router_msg_process(self, msg, origin=None):
         if not origin:
@@ -426,17 +470,16 @@ class BotDriver(object):
 
         pass
     def check_inbox(self):
-        msg = self.inbox.get()
+        msg, priority = self.inbox.get(get_priority=True)
         if (msg):
             self.msg_id+=1
             now = datetime.utcnow().strftime("%m/%d/%y %H:%M:%S.%f")
-            print "_________________________________________\n<BotDriver Inbox {} msgid {} {}>\n{}\n____________________________".format(os.getpid(), self.msg_id, now, msg)
+            print "_________________________________________\n<BotDriver Inbox {} prior: {} msgid {} {}>\n{}\n____________________________".format(os.getpid(), priority, self.msg_id, now, msg)
 
 
             if (type(msg) != type({})):
                 print "ABOVE MSG IS CORRUPTED OR NOT FORMATTED\n-------------------------\n"
                 return
-
             self.router_msg_process(msg)
 
     def check_msg_timers(self):
@@ -549,7 +592,14 @@ class BotDriver(object):
             self.init_start()
 
             while True and not self.KILL_BOT:
-                self.loop()
+                try:
+                    self.loop()
+                except Exception as e:
+                    if self.BOT_TYPE == "MASTER":
+                        print "\n\n~~~~~~~~~~~~~~~~~~~~~~\nbd.check_inbox error: {}\n\n\n".format(e)
+                        err_msg = 'Uncaught Master Error "{}": {}'.format(str(e), traceback.format_exc())
+
+                        self.alert_CPV1('UNCAUGHT ERROR: >>{}<<'.format(err_msg), persist=False)
 
             #RIGHT HERE IS WHERE WATCHDOG RUNS THROUGH BOTS RUNNING PROCESSES AND PURGES
 

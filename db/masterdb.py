@@ -7,74 +7,67 @@ import os
 
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
-
-NOTIFY_SCHEDULER_COLS = [
-    'id',
-    'frequency_min', 
-    'run_time',
-    'route',
-    'data',
-    'scheduler_group_id'
-]
-
-
-NOTIFY_SCHEDULER_GROUP_COLS = [
-    'id',
-    'name'
-]
-NOTIFY_SLAVE_TYPE_COLS = [
-    'id',
-    'name'
-]
-
-NOTIFY_SLAVE_COLS = [
-    'id',
-    'active',
-    'slave_type_id',
-    'is_ec2'
-]
-
-
-NOTIFY_TASK_COLS = [
-    'id',
-    'completed',
-    'active',
-    'error',
-    'msg',
-    'job_id',
-    'task_group_id',
-    'name',
-    'time_created',
-    'time_started',
-    'time_completed',
-    'assigned_slave_id'
-]
-
-NOTIFY_JOB_COLS = [
-    'id',
-    'stage',
-    'msg',
-    'name',
-    'error',
-    'completed'
-]
-
-NOTIFY_TASK_GROUP_COLS = [
-    'job_id',
-    'id',
-    'total_cnt',
-    'completed_cnt',
-    'error_cnt'
-]
-
-NOTIFY_ALERT_COLS = [
-    'id',
-    'msg',
-    'go_to',
-    'viewed',
-    'time'
-]
 Base = declarative_base()
+
+
+class PermissionGroup (Base):
+    __tablename__ = 'PermissionGroup'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(30), nullable=False)
+
+    job_read = Column(Boolean, nullable=False)
+    job_write = Column(Boolean, nullable=False)
+    job_execute = Column(Boolean, nullable=False)
+
+    master_read = Column(Boolean, nullable=False)
+    master_write = Column(Boolean, nullable=False)
+    master_execute = Column(Boolean, nullable=False)
+
+    slave_read = Column(Boolean, nullable=False)
+    slave_write = Column(Boolean, nullable=False)
+    slave_execute = Column(Boolean, nullable=False)
+
+    warehouse_read = Column(Boolean, nullable=False)
+    warehouse_write = Column(Boolean, nullable=False)
+    warehouse_execute = Column(Boolean, nullable=False)
+
+
+    def __init__(self, payload):
+        self.name = payload['name']
+
+        self.job_read = payload['job_read']
+        self.job_write = payload['job_write']
+        self.job_execute = payload['job_execute']
+
+
+        self.master_read = payload['master_read']
+        self.master_write = payload['master_write']
+        self.master_execute = payload['master_execute']
+
+        self.slave_read = payload['slave_read']
+        self.slave_write = payload['slave_write']
+        self.slave_execute = payload['slave_execute']
+
+        self.warehouse_read = payload['warehouse_read']
+        self.warehouse_write = payload['warehouse_write']
+        self.warehouse_execute = payload['warehouse_execute']
+
+class User (Base):
+    __tablename__ = 'User'
+    id = Column(Integer, primary_key=True)
+    username = Column(String(20), nullable=False, unique=True)
+    password = Column(String(50), nullable=False)
+    permission_group_id = Column(ForeignKey('PermissionGroup.id'), nullable=False)
+
+    def __init__(self, payload):
+        self.permission_group_id = payload['permission_group_id']
+        self.username = payload['username']
+        password_hash = payload['password']
+
+        ##hash pwd
+
+        self.password = password_hash 
+
 
 class Alert (Base):
     __tablename__ = 'Alert'
@@ -91,10 +84,6 @@ class Alert (Base):
         cols = payload.keys()
         if 'go_to' in cols:
             self.go_to = payload['go_to']
-
-        if 'viewed' in cols:
-            self.viewed = payload['viewed']
-
 
 class SlaveTaskGroup (Base):
     __tablename__ = "SlaveTaskGroup"
@@ -154,6 +143,7 @@ class Slave (Base):
     __tablename__ = 'Slave'
     id = Column(Integer, primary_key=True)
     slave_type_id = Column(ForeignKey('SlaveType.id'))
+    first_pulse = Column(DateTime)
     last_pulse = Column(DateTime)
     is_ec2 = Column(Boolean, default=False)
     ec2_instance_id = Column(String(30))
@@ -161,9 +151,11 @@ class Slave (Base):
     init = Column(Boolean, default=False)
     uuid = Column(String(36))
     tasks = relationship('SlaveTask')
+    working = Column(Boolean, default=False)
 
     def __init__(self, payload):
         cols = payload.keys()
+        self.first_pulse = datetime.utcnow()
         if 'slave_type_id' in cols:
             self.slave_type_id = payload['slave_type_id']
 
@@ -178,6 +170,9 @@ class Slave (Base):
         if 'uuid' in cols:
             self.uuid = payload['uuid']
 
+
+        if 'first_pulse' in cols:
+            self.first_pulse = payload['first_pulse']
         if 'last_pulse' in cols:
             self.last_pulse = payload['last_pulse']
 
@@ -232,8 +227,6 @@ class SlaveTaskChainer (Base):
 class SlaveJob (Base):
     __tablename__ = 'SlaveJob'
     id = Column(Integer, primary_key=True)
-    route = Column(String(100), nullable=True)
-    data = Column(Text, default='{}')
 
     name = Column(String(50))
     created_time = Column(DateTime, nullable=False)
@@ -242,7 +235,10 @@ class SlaveJob (Base):
     msg = Column(String(100))
     stage = Column(String(100), default="Queued")
     tasks = relationship("SlaveTask")
-    send_alert = Column(Boolean, default=True)
+    send_alert = Column(Boolean, default=False)
+    hidden = Column(Boolean, default=False)
+
+    priority = Column(Integer, default=0, nullable=False)
 
     def __init__(self, payload):
         self.name = payload['name']
@@ -254,14 +250,23 @@ class SlaveJob (Base):
         if 'send_alert' in cols:
             self.send_alert = payload['send_alert']
 
+        if 'priority' in cols:
+            self.priority = payload['priority']
+
+        if 'hidden' in cols:
+            self.hidden = payload['hidden']
+
 
 class SlaveTask (Base):
     __tablename__ = 'SlaveTask'
 
     id = Column(Integer, primary_key=True)
     name = Column(String(50))
-    job_id = Column(ForeignKey('SlaveJob.id'))
+    job_id = Column(ForeignKey('SlaveJob.id'), nullable=False)
     job_ok_on_error = Column(Boolean, default=False)
+    priority = Column(Integer, nullable=False, default=1)
+    retried_task_id = Column(ForeignKey('SlaveTask.id'), default=None)
+    retry_cnt = Column(Integer, default=0)
 
     task_group_id = Column(ForeignKey('SlaveTaskGroup.id'), nullable=True)
 
@@ -270,7 +275,7 @@ class SlaveTask (Base):
     started = Column(Boolean, default=False) 
     completed = Column(Boolean, default=False)
 
-    msg = Column(String(100), default="Waiting for avaiable slave")
+    msg = Column(String(100), default="Waiting for available slave")
     error = Column(Boolean, default=False)
 
 
@@ -284,35 +289,50 @@ class SlaveTask (Base):
     assigned_slave_id = Column(ForeignKey('Slave.id'))
     assigned_slave = relationship('Slave')
 
-
     def __init__(self, payload):
-        print "PAYLOAD: {}".format(payload)
         self.time_created = datetime.utcnow()
         self.name = payload['name']
         if type(payload['data']) == type({}):
             payload['data'] = json.dumps(payload['data'])
         self.data = payload['data']
         self.route = payload['route']
+        self.job_id = payload['job_id']
     
         cols = payload.keys()
         if 'slave_type_id' in cols:
             self.slave_type_id = payload['slave_type_id']
         else:
             self.error = True
-            self.msg = 'Incorrect task route'
+            self.msg = 'Incorrect model id'
             self.active = False
 
-        if 'job_id' in cols:
-            self.job_id = payload['job_id']
-            if 'job_ok_on_error' in cols:
-                self.job_ok_on_error = payload['job_ok_on_error']
-            if 'task_group_id' in cols:
-                self.task_group_id = payload['task_group_id']
+        if 'job_ok_on_error' in cols:
+            self.job_ok_on_error = payload['job_ok_on_error']
+        if 'task_group_id' in cols:
+            self.task_group_id = payload['task_group_id']
+        
+        if 'priorty' in cols:
+            self.priority = payload['priority']
+
+        if 'retried_task_id' in cols:
+            self.retried_task_id = payload['retried_task_id']
+            self.retry_cnt = payload['retry_cnt']
+
+        if 'retry_cnt' in cols:
+            self.retry_cnt = payload['retry_cnt']
 
     def is_error(self, msg=None):
         self.error = True
         self.msg = msg
 
-accessible_models = [Slave, Alert, SlaveTaskGroup, SlaveJob, SlaveTask, SlaveTaskGroup, SchedulerGroup, Scheduler, SlaveType]
-
+accessible_models = [
+    [Slave, ['id', 'active', 'uuid', 'slave_type_id', 'is_ec2', 'init', 'working']],
+    [Alert, ['id', 'msg', 'go_to', 'viewed', 'time']], 
+    [SlaveJob, ['id', 'priority', 'stage', 'msg', 'name', 'error', 'completed', 'hidden']], 
+    [SlaveTask,['id', 'completed', 'active', 'error', 'msg', 'job_id', 'task_group_id', 'name', 'time_created', 'time_started', 'time_completed', 'assigned_slave_id']],
+    [SlaveTaskGroup,['job_id', 'id', 'total_cnt', 'completed_cnt', 'error_cnt']], 
+    [SchedulerGroup,['id', 'name']],
+    [Scheduler, ['id','frequency_min', 'run_time','route','data','scheduler_group_id']],
+    [SlaveType, ['id', 'name']]
+]
 

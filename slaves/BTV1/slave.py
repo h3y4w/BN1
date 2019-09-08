@@ -18,12 +18,12 @@ from binance.client import Client
 from binance.websockets import BinanceSocketManager
 
 
-class BinanceTrader(SlaveDriver):
+class BTV1(SlaveDriver):
     model_id = 'BTV1'
     bm = None
     client = None
     def __init__(self, config):
-        super(BinanceTrader, self).__init__(config)
+        super(BTV1, self).__init__(config)
         self.add_command_mappings({
             'bd.sd.@BTV1.echo.job': self.echo,
             'bd.sd.@BTV1.do.shit': self.do_shit,

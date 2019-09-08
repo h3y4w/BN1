@@ -5,13 +5,15 @@ config = None
 exc_dir = os.path.dirname(os.path.abspath(__file__))
 fn = os.path.dirname(os.path.abspath(__file__))+'/../../configs/clerk_config.json'
 with open(fn, 'r') as f:
-    config = json.loads(f.read())
+    s = f.read()
+    print s
+    config = json.loads(s)
 os.chdir(config['lib_directory'])
 
 sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
-from slaves.warehouse_clerk.slave import WarehouseClerk
+from slaves.WCV1.slave import WCV1 as WarehouseClerk
 
 
 WarehouseClerk(config).start()

@@ -6,6 +6,9 @@ from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_
 
 import traceback
 
+START_DEL = '\n\r'
+END_DEL = '\r\n'
+
 class Payload (object):
     def __init__(self, data, code, error):
         self.data = data
@@ -36,32 +39,85 @@ class Echo(protocol.Protocol):
     def __init__(self, factory):
         self.factory = factory
         self.uuid = None
+        self.dbuffer = ""
 
     def connectionMade(self):
         self.connected = True
 
     def connectionLost(self, reason):
-        print '</> (Lost {})'.format(self.uuid)
+        print '</> (Lost {}) bc: {}'.format(self.uuid, reason)
         if self.uuid in self.factory.connections.keys():
             #delete uuid from connections
-            del self.factory.connections[self.uuid]
+            try:
+                driver.inbox.put(create_local_task_message('bd.@md.slave.lost', {'uuid':self.uuid}),0)
+            except:
+                pass
+            finally:
+                del self.factory.connections[self.uuid]
 
-        driver.inbox.put(create_local_task_message('bd.@md.slave.lost', {'uuid':self.uuid}),0)
 
     def dataReceived(self, data):
-        if not self.uuid:
-            print "\n\nSLAVE IS NOT REGISTER comms.server\n\n"
+        received = False
+        start = False
+        end = False
+
             
         try:
-            data = json.loads(str(data))
-        except Exception as e:
+            raw_data = str(data)
 
+            data = raw_data
+            if raw_data[:2] == START_DEL:
+                start = True
+
+            if raw_data[-2:] == END_DEL:
+                end = True
+
+
+            if start and end:
+                try:
+                    data = json.loads(raw_data)
+                except ValueError:
+                    idx = raw_data.find(END_DEL)
+                    if idx != (len(raw_data)-1):
+                        rds = raw_data.split(END_DEL)
+                        for rd in rds:
+                            d = json.loads(rd+END_DEL)
+                            self.send_to_inbox(d)
+                            return
+                else:
+                    received = True
+
+            elif start and not end:
+                self.dbuffer = raw_data
+
+            elif not start and end:
+                if self.dbuffer:
+                    if self.dbuffer[:1] == START_DEL:
+                        poss = self.dbuffer + raw_data
+                        try:
+                            data = json.loads(poss)
+                        except Exception as e:
+                            print "not START AND END ERROR: {}".format(e)
+                        else:
+                            received = True
+
+        except Exception as e:
             print '\n\ncomms.server.Excepion: {}\nERROR: {}\n\n'.format(e, data)
             print traceback.print_exc()
-        else:
+
+
+        if received:
+            self.send_to_inbox(data)
+    
+    def send_to_inbox(self, data):
             if data['route'] == 'bd.@md.slave.connect': #create seperate func
                 self.uuid = data['data']['uuid']
                 self.factory.connections[data['data']['uuid']] = self
+            else:
+                if not self.uuid:
+                    self.transport.abortConnection()
+                    print "\n\nSLAVE IS NOT REGISTER DISCONNECTING: {} comms.server\n\n".format(self.uuid)
+                    return
             
             data['route_meta']['origin'] = self.uuid
             msg = create_local_task_message(
@@ -70,6 +126,10 @@ class Echo(protocol.Protocol):
                 data['route_meta']
             )
             driver.inbox.put(msg, INBOX_SYS_MSG)
+
+    def send(self, payload):
+        #if self.connected:
+        self.transport.write(START_DEL+payload+END_DEL)
 
     def forward(self, data):
         if self.connected:
@@ -88,19 +148,18 @@ class BotServerFactory(protocol.Factory):
         return e
 
     def send_it(self, payload):
-        self.connections[payload['uuid']].transport.write(json.dumps(payload['data']))
+        uuid = payload['uuid']
+        data = None
+        if type(payload) == dict:
+            data = json.dumps(payload['data'])
+        try:
+            self.connections[uuid].send(data)
+        except KeyError:
+            self.driver.inbox.put(create_local_task_message('bd.@md.slave.lost', {'uuid':uuid}),0)
+            if uuid in self.connections.keys():
+                del self.connections[uuid]
 
-    def sendTime(self):
-        print 'SENDING TIME'
-        payload = Payload(str(datetime.utcnow()), 200, False)
-        for con in self.connections:
-            c = self.connections[con]
-            is_alive = 1
-            if (is_alive):
-                print 'SENT TIME'
-                c.forward(payload.dump())
-            else:
-                print 'removed disconnected client'
+            print "\n\ncomms.server UUID: {} DOESNT EXIST AS CONNECTION".format(uuid)
 
 #reactor.listenTCP(5007, EchoFactory())
 #reactor.run()

@@ -11,7 +11,7 @@ os.chdir(config['lib_directory'])
 sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
-from slaves.alcatraz_bot.slave import AlcatrazTicketBot as Slave 
+from slaves.ATBV1.slave import ATBV1 as Slave 
 
 Slave(config).start()
 

@@ -18,24 +18,50 @@ from alcatraz_scraper import AlcatrazScraper
 import giftcardscom_funcs
 import alcatrazcruises_funcs
 
-class AlcatrazTicketBot(SlaveDriver):
+class ATBV1(SlaveDriver):
     model_id = 'ATBV1'
     bm = None
     client = None
     def __init__(self, config):
-        super(AlcatrazTicketBot, self).__init__(config)
+        super(ATBV1, self).__init__(config)
         self.add_command_mappings({
             'bd.sd.@ATBV1.echo.job': self.echo,
+            'bd.sd.@ATBV1.test.fail': self.bd_sd_ATBV1_test_fail,
+            'bd.sd.@ATBV1.fail': self.bd_sd_ATBV1_fail,
+            'bd.sd.@ATBV1.work': self.bd_sd_ATBV1_work,
             'bd.sd.@ATBV1.$prepaid.buy': self.bd_sd_ATBV1_job_prepaid_buy,
             'bd.sd.@ATBV1.$alcatraz.tickets.manage': self.bd_sd_ATBV1_job_alcatraz_tickets_manage,
             'bd.sd.@ATBV1.$alcatraz.tickets': self.bd_sd_ATBV1_job_alcatraz_tickets,
             'bd.sd.@ATBV1.alcatraz.tickets.availability': self.bd_sd_ATBV1_alcatraz_tickets_availability,
-            'bd.sd.@ATBV1.alcatraz.tickets.purchase': self.bd_sd_ATBV1_alcatraz_tickets_purchase
+            'bd.sd.@ATBV1.alcatraz.tickets.purchase': self.bd_sd_ATBV1_alcatraz_tickets_purchase,
+            'bd.sd.@ATBV1.alcatraz.test': self.bd_sd_ATBV1_alcatraz_test
         })
 
+    def bd_sd_ATBV1_test_fail(self, data, route_meta):
+        times = str(datetime.utcnow())
+        
+        self.add_global_task('bd.sd.@ATBV1.fail', {'v':2, 'time':times}, "Task that will fail", retry_cnt=2)
+        #self.add_global_task('bd.sd.@ATBV1.work', {'v':2}, "Task that will work", retry_cnt=2)
+
+    def bd_sd_ATBV1_fail(self, data, route_meta):
+        time.sleep(1)
+        t = data['time'] 
+        t = datetime.strptime(t ,"%Y-%m-%d %H:%M:%S.%f"
+)
+        if datetime.utcnow() > timedelta(seconds=4) + t:
+            return
+        's'+3
+
+    def bd_sd_ATBV1_work(self, data, route_meta):
+        time.sleep(.5)
+
+    def bd_sd_ATBV1_alcatraz_test(self, data, route_meta):
+        driver = self.create_driver()
+        driver.get('https://hello.world/')
+        time.sleep(3)
+        driver.quit()
+
     def bd_sd_ATBV1_alcatraz_tickets_availability(self, data, route_meta):
-
-
         now = datetime.utcnow()
         future = datetime.utcnow() + timedelta(days=31*3) #approx 3 months
         start = now.strftime('%m/%d/%Y')
@@ -108,21 +134,29 @@ class AlcatrazTicketBot(SlaveDriver):
                 cnt+=1
 
 
+    def create_driver(self):
+
+        options = Options()
+        options.add_argument("--window-size=1920x1080")
+        options.add_argument("--disable-gpu")
+        exe_path = '/usr/lib/chromium-browser/chromedriver'
+
+        #options.add_argument("--headless")
+
+        if self.is_ec2: #testing
+            options.add_argument("--headless")
+        return webdriver.Chrome(executable_path=exe_path, chrome_options=options)
+
+        #return webdriver.Chrome(chrome_options=options)
+
+
     def bd_sd_ATBV1_alcatraz_tickets_purchase(self, data, route_meta):
+        driver = None
         try:
             print '\n\n\n\nrd: {}'.format(data)
-            options = Options()
-            #options.add_argument("--headless")
-            options.add_argument("--window-size=1920x1080")
-            options.add_argument("--disable-gpu")
-            def create_driver():
-                driver = webdriver.Chrome(executable_path='/usr/local/share/chromedriver', chrome_options=options)
+            driver = self.create_driver()
 
-                driver.get('https://www.alcatrazcruises.com/checkout/?id=1000016')
-                return driver
-
-            driver = create_driver() 
-
+            driver.get('https://www.alcatrazcruises.com/checkout/?id=1000016')
             abot = AlcatrazScraper(driver)
             time.sleep(5)
 
@@ -132,11 +166,15 @@ class AlcatrazTicketBot(SlaveDriver):
                 if flag_level == -1:
                     print "RELAUNCHING DRIVER"
                     driver.quit()
-                    driver = create_driver()
+                    driver = self.create_driver()
+                    driver.get('https://www.alcatrazcruises.com/checkout/?id=1000016')
                     abot = AlcatrazScraper(driver)
                     try:
+                        driver.save_screenshot('~/Pictures/atbv1/root_iframe.png')
+
                         abot.get_root_iframe()
                     except:
+                        driver.save_screenshot('~/Pictures/atbv1/root_iframe_error.png')
                         continue
                     else:
                         time.sleep(1)
@@ -144,6 +182,8 @@ class AlcatrazTicketBot(SlaveDriver):
 
                 if flag_level == 0:
                     try:
+                        driver.save_screenshot('~/Pictures/atbv1/ticket_stage.png')
+
                         print 'Trying ticket stage...'
                         abot.ticket_stage(data['purchase_time'])
                     except Exception as error:

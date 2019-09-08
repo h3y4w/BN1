@@ -49,6 +49,7 @@ class Heartbeat (object):
                                         self.kill_pid(p)
 
                                 self.kill_pid(pid)
+                                self.kill_pid(os.getpid())
                                 sys.exit(1)
                             else:
                                 msg = create_local_task_message('@bd.process.kill', {'pid':pid})

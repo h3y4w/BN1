@@ -10,32 +10,47 @@ from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_
 from datetime import datetime, timedelta
 
 class SlaveDriver (BotDriver):
+    CONNECTED_TO_MASTER = False
     
     PULSE_MASTER_TIMER = None
     master_server_ip = None 
     master_server_port = None 
+    is_ec2 = False
+
+    BOT_TYPE = "SLAVE"
+
     def __init__(self, config):
+        super(SlaveDriver, self).__init__(config)
+
 
         slave_key_path = os.path.expanduser('~/.slave_key.json')
         slave_key_info = None 
+
+        print "SLAVE KEY SHOULD BE :{}".format(slave_key_path)
         
         if os.path.exists(slave_key_path):
+            print "SLAVE PATH EXISTS"
             with open(slave_key_path, 'r') as f:
                 slave_key_info = json.loads(f.read())
 
-        if slave_key_info: #this can pass more auth in future
-            self.uuid = slave_key_info['uuid']
+            if slave_key_info: #this can pass more auth in future
+                self.uuid = slave_key_info['uuid']
+                self.is_ec2 = True
+                print "FOUND UUID: {}".format(self.uuid)
+                #self.key = slave_key_info['key']
+                #self.secret = slave_key_info['secret']
+
 
         self.master_server_ip = config['master_server_ip']
         self.master_server_port = config['master_server_port']
         self.PULSE_MASTER_TIMER = datetime.utcnow()
 
-        super(SlaveDriver, self).__init__(config)
-
         self.bot_route_header = self.bot_route_header + ".sd.@" + self.model_id
 
 
         maps = {
+            'bd.@sd.master.connected': self.bd_sd_master_connected,
+            'bd.@sd.master.disconnected': self.bd_sd_master_disconnected,
             'bd.@sd.slave.auth': self.bd_sd_slave_auth,
 
             'bd.@sd.task.global.start': self.bd_sd_task_global_start,
@@ -45,6 +60,8 @@ class SlaveDriver (BotDriver):
         }
         self.add_command_mappings(maps)
 
+    def send_message_to_master(self, msg, priority=OUTBOX_TASK_MSG):
+        self.outbox.put(msg, priority)
 
     def comms(self):
         self.comms_on = True
@@ -53,27 +70,53 @@ class SlaveDriver (BotDriver):
 
         print 'Starting SlaveDriver Comms'
         self.heartbeat.__track_process__(pid, name='SlaveDriver Comms', route='@bd.comms.launch')
-        self.comms_pulse_cb = task.LoopingCall(self.heartbeat.send_pulse, pid=pid)
+        self.comms_pulse_cb = task.LoopingCall(self.heartbeat.send_pulse, pid=pid, tmp_grace=10)
 
-        cp = self.comms_pulse_cb.start(5)
+        cp = self.comms_pulse_cb.start(2)
         cp.addErrback(prnt)
 
-        self.factory = BotClientFactory()
-        self.factory.set_driver(self)
+        self.factory = BotClientFactory(self)
+        self.init_outbox_callback()
+
 
         reactor.connectTCP(self.master_server_ip, self.master_server_port, self.factory)
         reactor.run()
 
 
-    def add_global_task(self, route, data, name, parent_task_id=None, task_group_id=None, job_id=None, job_ok_on_error=False, route_meta=None):
+    def bd_sd_master_disconnected(self, data, route_meta):
+        self.CONNECTED_TO_MASTER = False
+        print "BD_SD_MASTER_DISCONNECTED!!!\n\n"
+        if hasattr(self, 'comms_pulse'):
+            self.comms_pulse_cb.stop()
+
+        if hasattr(self, 'disconnected_from_master'):
+            self.disconnected_from_master()
+
+    def bd_sd_master_connected(self, data, route_meta):
+        self.CONNECTED_TO_MASTER = True
+        print "BD_SD_MASTER_CONNECTED!!!\n\n"
+
+        if hasattr(self, 'connected_to_master'):
+            self.connected_to_master()
+
+    def add_global_task(self, route, data, name, parent_task_id=None, task_group_id=None, job_id=None, job_ok_on_error=False, retry_cnt=None, route_meta=None):
         #send global task to masterdriver
+
         if self.RUNNING_GLOBAL_TASK:
             if not job_id:
                 job_id = self.job_id
+            print  "RUNNING GLOBAL_TASK"
 
-        msg = self.create_global_task_message(route, data, name, parent_task_id, 
-                                                   task_group_id, job_id, job_ok_on_error, 
-                                                   route_meta=route_meta)
+        print "SELF>JOB {} SELF>TASK{}\n\n\n\n".format(self.job_id, self.task_id)
+
+        msg = self.create_global_task_message(route, data, name, 
+                                              parent_task_id=parent_task_id, 
+                                              task_group_id=task_group_id,
+                                              job_id=job_id,
+                                              job_ok_on_error=job_ok_on_error, 
+                                              retry_cnt=retry_cnt,
+                                              route_meta=route_meta)
+        print msg
         self.outbox.put(msg, OUTBOX_SYS_MSG)
     
     def add_global_task_group(self, route, data, name, job_ok_on_error=False, job_id=None, route_meta=None):
