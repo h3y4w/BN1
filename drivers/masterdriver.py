@@ -12,10 +12,7 @@ from sqlalchemy import func, desc, and_, or_
 from datetime import datetime, timedelta
 
 from twisted.internet import reactor, protocol, task
-
 import json
-
-
 import boto3
 
 class MasterDriver(BotDriver):
@@ -30,8 +27,6 @@ class MasterDriver(BotDriver):
     BOT_TYPE = "MASTER"
 
 
-    
-
     def setup_aws(self):
         if self.aws_key and self.aws_secret:
             self.ec2_resource = boto3.resource(
@@ -42,21 +37,21 @@ class MasterDriver(BotDriver):
             )
             self.USE_AWS_RESOURCES = 1 
 
-
     def __init__(self, config):
         ### SET MASTERDRIVER SETTINGS FROM CONFIG HERE
         self.port = config['server_port'] 
         self.host = config['server_host']
 
         self.funcs = [ 
-            [self.check_slave_pulses, 1000],
+            [self.check_slave_pulses, 500],
             [self.check_inbox, 0],
             [self.check_msg_timers, 1000],
             [self.check_slave_tasks, 0],
             [self.check_slave_task_groups, 3000],
             [self.check_slave_chainers, 3000],
             [self.check_slave_schedules, 1000],
-            [self.check_aws_slaves, 3000]
+            [self.check_CPV1_packet_queue, 1000],
+            [self.check_aws_slaves, 5000]
         ]
 
         super(MasterDriver, self).__init__(config)
@@ -89,6 +84,7 @@ class MasterDriver(BotDriver):
             'bd.@md.slave.job.error': self.bd_md_slave_job_error,
 
             'bd.@md.slave.task.add': self.bd_md_slave_task_add,
+            'bd.@md.slave.task.reject': self.bd_md_slave_task_reject,
             'bd.@md.slave.task.remove': self.bd_md_slave_task_remove,
             'bd.@md.slave.task.error': self.bd_md_slave_task_error,
             'bd.@md.slave.task.started': self.bd_md_slave_task_started,
@@ -107,6 +103,7 @@ class MasterDriver(BotDriver):
             'bd.@md.slave.terminate': self.bd_md_slave_terminate,
             'bd.@md.slave.free': None,
             'bd.@md.slave.list': None,
+
             'bd.@md.alert.add': self.bd_md_alert_add,
             'bd.@md.alert.viewed': self.bd_md_alert_viewed,
             'bd.@md.alert.remove': self.bd_md_alert_remove,
@@ -131,6 +128,8 @@ class MasterDriver(BotDriver):
         self.CPV1_grace_minutes = 120 #change this later
         self.CPV1_pinged_times = {} 
 
+        self.CPV1_packet_queue = [] 
+
         args = []
         db_fn = os.path.join(self.__exc_dir__, 'master.db')
         #remove in future
@@ -147,7 +146,7 @@ class MasterDriver(BotDriver):
             args = [
                 {'name': 'AccessPoint', 'model_id': 'APV1'},
                 {'name': 'Command Portal', 'model_id': 'CPV1'},
-                {'name': 'Scraper', 'model_id': 'SCV1'},
+                {'name': 'Amazon Price Tracker', 'model_id': 'APTV1'},
                 {'name': 'Warehouse Clerk', 'model_id': 'WCV1'},
                 {'name': 'Binance Trader', 'model_id': 'BTV1'},
                 {'name': 'Alcatraz Ticket Bot', 'model_id': 'ATBV1'}
@@ -187,7 +186,8 @@ class MasterDriver(BotDriver):
 
             for slave in slaves:
                 if slave.is_ec2:
-                    self.terminate_ec2_instance([slave.ec2_instance_id])
+                        self.terminate_ec2_instance([slave.ec2_instance_id])
+
                 slave.active = False
 
             self.master_db.session.commit()
@@ -462,14 +462,21 @@ class MasterDriver(BotDriver):
         
         for slave in slaves:
             if slave.working: #checks if slave is still actually working
-            ##doesnt account for times when task has been assigned but slave hasnt started because its sorting by time_started
                 task = self.master_db.session.query(masterdb.SlaveTask)\
                         .filter(masterdb.SlaveTask.assigned_slave_id==slave.id)\
                         .order_by(masterdb.SlaveTask.time_started.desc())\
                         .first()
-                if task.completed or task.error:
-                    slave.working=False
+
+                if not task:
+                    slave.working = False
                     self.master_db.session.commit()
+
+                else:
+
+                    if task.completed or task.error:
+                        slave.working=False
+                        self.master_db.session.commit()
+
 
             if (slave.last_pulse + timedelta(seconds=15)) < datetime.utcnow():
                 slave.active = False
@@ -519,8 +526,6 @@ class MasterDriver(BotDriver):
                             self.master_db.session.commit()
                             self.notify_CPV1('add', scheduler)
 
-
-
         #polls database for scheduler
     def check_slave_chainers(self):
         chainers = self.master_db.session.query(masterdb.SlaveTaskChainer)\
@@ -560,7 +565,7 @@ class MasterDriver(BotDriver):
                     task_args['route'] = task_group.cb_route 
                     task_args['job_id'] = task_group.job_id
 
-                    cb_data = self.taskrunner_inbox_get_tag(task_group.cb_data_tag, get_all=True)
+                    #cb_data = self.taskrunner_inbox_get_tag(task_group.cb_data_tag, get_all=True)
 
                     task_args['data'] = {
                         'cb_data': cb_data,
@@ -580,8 +585,6 @@ class MasterDriver(BotDriver):
 
     def check_slave_tasks(self):
         # sort by priority
-
-
         #queue order is important
         tasks = self.master_db.session.query(masterdb.SlaveTask)\
                  .filter(
@@ -596,6 +599,27 @@ class MasterDriver(BotDriver):
                     masterdb.SlaveJob.error==False
                 ).order_by(masterdb.SlaveJob.priority.desc(), masterdb.SlaveJob.created_time).all()
         
+
+        def live_slaves (slave_type_needed, is_working):
+            slaves = self.master_db.session.query(masterdb.Slave)\
+                    .filter(
+                        masterdb.Slave.active==True,
+                        masterdb.Slave.working==is_working,
+                        masterdb.Slave.init==False,
+                        masterdb.Slave.slave_type_id.in_(slave_type_needed))\
+                    .all()
+
+            slave_list = {}
+            for slave in slaves:
+                key = str(slave.slave_type_id)
+
+                if slave.working==is_working: #adds non working slaves
+                    if not key in slave_list.keys():
+                        slave_list[key] = [] 
+
+                    slave_list[key].append(slave) 
+
+            return slaves, slave_list
 
         if len(jobs):
             self.highest_slave_job_priority = jobs[0].priority
@@ -612,12 +636,8 @@ class MasterDriver(BotDriver):
                 if not task.slave_type_id in slave_type_needed:
                     slave_type_needed.append(task.slave_type_id)
 
-            slaves = self.master_db.session.query(masterdb.Slave)\
-                    .filter(
-                        masterdb.Slave.active==True,
-                        masterdb.Slave.init==False,
-                        masterdb.Slave.slave_type_id.in_(slave_type_needed))\
-                    .all()
+            slaves, free_slaves = live_slaves(slave_type_needed, False)
+            slaves, working_slaves = live_slaves(slave_type_needed, True)
 
             if not len(slaves): #no slaves with needed type
                 pass
@@ -627,30 +647,15 @@ class MasterDriver(BotDriver):
                     self.notify_CPV1('add', alert)
                 return
                 '''
-
-            slave_list = {}
-            working_slaves = {}
-            for slave in slaves:
-
-                key = str(slave.slave_type_id)
-                if not key in slave_list.keys():
-                    slave_list[key] = [] 
-
-                if not slave.working:
-                    slave_list[key].append(slave)
-                else:
-                    if not key in working_slaves.keys():
-                        working_slaves[key] = [] 
-                        working_slaves[key].append(slave)
-
             
             ASSIGNED_TASK = False
 
             #add a check to see if active slaves for tasks 
-            keys = slave_list.keys()
+            keys = free_slaves.keys()
             for job in jobs:
                 if ASSIGNED_TASK:
                     break
+
                 j_tasks = None 
                 try:
                     j_tasks = job_tasks_map[str(job.id)]
@@ -663,8 +668,7 @@ class MasterDriver(BotDriver):
                     if not key in keys:
                         if key in working_slaves.keys() and not self.AWS_SLAVES_ONDEMAND:
                             #waiting for next slave
-                            pass
-
+                            continue
                         else:
                             #launch more bots
                             if task.active:
@@ -677,39 +681,43 @@ class MasterDriver(BotDriver):
                                                 .filter(masterdb.SlaveType.id==task.slave_type_id)\
                                                 .first()
 
-                                        task.msg = 'Launch slave type "{}" to start'.format(st.name)
 
+                                        task.msg = 'Launch slave type "{}" to start'.format(st.name)
                                         msg = 'Slave type [{}] "{}" needed to run queued tasks'.format(st.id, st.name)
                                         go_to = '/bots'
                                         self.alert_CPV1(msg, go_to, persist=True)
 
                                 self.master_db.session.commit()
 
-                    elif len(slave_list[key]):
-                        for i in xrange(0, len(slave_list[key])):
-                            slave = slave_list[key].pop(0)
-                            i = 0
-                            keys = slave_list.keys() #updates keys
+                    elif len(free_slaves[key]):
+                        print "FREE SLAVES IN KEY: {}".format(free_slaves[key])
+                        slave = free_slaves[key].pop(0)
+                        i = 0
+                        keys = free_slaves.keys() #updates keys
 
-                            task.assigned_slave_id = slave.id
-                            task.msg = 'Assigned to slave [{}]'.format(slave.id)
-                            task.active=True
-                            slave.working = True
+                        task.assigned_slave_id = slave.id
+                        task.msg = 'Assigned to slave [{}]'.format(slave.id)
+                        task.active=True
+                        slave.working = True
 
-                            if task.job_id:
-                                job = self.master_db.session.query(masterdb.SlaveJob).filter(masterdb.SlaveJob.id == task.job_id).first()
-                                if job:
-                                    if job.stage == 'Queued':
-                                        job.stage = 'Running'
-                                        
-                                        self.notify_CPV1('add', job)
+                        if task.job_id:
+                            job = self.master_db.session.query(masterdb.SlaveJob).filter(masterdb.SlaveJob.id == task.job_id).first()
+                            if job:
+                                if job.stage == 'Queued':
+                                    job.stage = 'Running'
+                                    
+                                    self.notify_CPV1('add', job)
 
 
-                            self.master_db.session.commit()
-                            self.send_global_task(slave.uuid, task.route, task.data, task.id, job_id=task.job_id)
-                            ASSIGNED_TASK = True
+                        self.master_db.session.commit()
+                        print "\n\n\n=================\nASSIGNING TASK {} TO SLAVE {}".format(task.id, slave.id)
+                        self.send_global_task(slave.uuid, task.route, task.data, task.id, job_id=task.job_id)
 
-                            self.notify_CPV1('add', task)
+                        self.notify_CPV1('add', task)
+                        self.notify_CPV1('add', slave)
+
+                        ASSIGNED_TASK = False
+#                            slaves, slave_list, working_slaves = live_slave_list(slave_type_needed)
 
 
     def bd_md_global_task_post(self, data, route_meta):
@@ -786,6 +794,22 @@ class MasterDriver(BotDriver):
         cp = self.comms_pulse_cb.start(5)
         cp.addErrback(prnt)
         reactor.run()
+
+    def check_CPV1_packet_queue(self):
+        packet = True
+        while (len(self.CPV1_packet_queue)):
+            packet = self.CPV1_packet_queue.pop(0)
+            if packet:
+                data, target_uuids = packet
+                for uuid in target_uuids:
+                    self.send_to_CPV1(data, uuid)
+
+    def send_to_CPV1(self, data, uuid):
+        msg = create_local_task_message('bd.sd.@CPV1.data.send', data)
+        self.send_message_to(uuid, msg, OUTBOX_SYS_MSG)
+
+    def send_CPV1(self, data, target_uuids=[]):
+        self.CPV1_packet_queue.append([data, target_uuids])
 
     def alert_CPV1(self, msg, go_to=None, persist=False, session_id=None, slave_uuid=None):
         id_ = 'np-'+str(self.CPV1_alert_npersist_id)
@@ -890,7 +914,39 @@ class MasterDriver(BotDriver):
                 raise Exception("Obj type: {} does not have defined paths".format(str(obj_type)))
             action = action_path
 
+        real_uuids = []
+        for uuid in uuids:
+            real_uuids.append(uuid[0])
+        uuids = real_uuids 
 
+        chunk_size = 30 
+        if type(payload) == list:
+            cnt = len(payload)/chunk_size
+            if len(payload) % chunk_size:
+                cnt+=1
+
+            for i in xrange(0, cnt):
+                chunk = payload[i*chunk_size:((i+1)*chunk_size-1)]
+            
+                rdata = {
+                    'action_data': chunk,
+                    'action': action,
+                    'last_update': msg_id,
+                    'sid': session_id
+                }
+                self.send_CPV1(rdata, uuids) 
+        else:
+            rdata = {
+                'action_data': payload,
+                'action': action,
+                'last_update': msg_id,
+                'sid': session_id
+            }
+           
+            self.send_CPV1(rdata, uuids)
+
+
+        '''
         for uuid in uuids:
             uuid = uuid[0]  
             chunk_size = 30 
@@ -908,9 +964,7 @@ class MasterDriver(BotDriver):
                         'last_update': msg_id,
                         'sid': session_id
                     }
-                    
-                    msg = create_local_task_message('bd.sd.@CPV1.data.send', rdata)
-                    self.send_message_to(uuid, msg, OUTBOX_SYS_MSG)
+                    self.send_CPV1(rdata) 
             else:
                 rdata = {
                     'action_data': payload,
@@ -918,9 +972,9 @@ class MasterDriver(BotDriver):
                     'last_update': msg_id,
                     'sid': session_id
                 }
-                
-                msg = create_local_task_message('bd.sd.@CPV1.data.send', rdata)
-                self.send_message_to(uuid, msg, OUTBOX_SYS_MSG)
+               
+                self.send_CPV1(rdata)
+        '''
 
         return True
 
@@ -1126,7 +1180,27 @@ class MasterDriver(BotDriver):
     def bd_md_slave_job_completed(self, data, route_meta):
         job = self.__slave_job_completed(data['job_id'])
 
-        
+    
+    def bd_md_slave_task_reject(self, data, route_meta):
+        print "\n\n\n\n"
+        print "REJECT DATA: {}\nREJECT ROUTE_META: {}".format(data, route_meta)
+
+        slave = self.master_db.session.query(masterdb.Slave)\
+                .filter(masterdb.Slave.uuid==route_meta['origin'])\
+                .first()
+        if slave:
+            task = self.master_db.session.query(masterdb.SlaveTask)\
+                    .filter(and_(masterdb.SlaveTask.id==data['task_id'], masterdb.SlaveTask.assigned_slave_id==slave.id))\
+                    .first()
+
+            if not (task.started or task.error):
+                task.assigned_slave_id = None
+                task.active = True
+                task.message = 'Requeued'
+                self.master_db.session.commit()
+                self.notify_CPV1('add', task)
+
+
     def bd_md_slave_task_add(self, data, route_meta):
         model_id = self.get_model_id_from_route(data['task_data']['route'])
 
@@ -1186,8 +1260,12 @@ class MasterDriver(BotDriver):
         task = self.master_db.session.query(masterdb.SlaveTask)\
                 .filter(masterdb.SlaveTask.id==data['task_id'])\
                 .first()
+
         if not task: 
             raise ValueError("Task id doesnt exist")
+        
+        if task.started:
+            raise ValueError("TASK {} HAS ALREADY STARTED, CANT START ONCE STARTED".format(task.id))
 
         task.started = True
         task.time_started = datetime.strptime(data['time_started'], "%Y-%m-%d %H:%M:%S.%f")
@@ -1720,12 +1798,7 @@ class MasterDriver(BotDriver):
                 .all()
 
         self.notify_CPV1('add', alerts, session_id=sid, slave_uuid=uuid, update=False)
-
-
         self.notify_CPV1('master.config.add', self.get_configs(), session_id=sid, slave_uuid=uuid, update=False)
-
-
-        
 
     def bd_md_Slave_CPV1_ping(self, data, route_meta):
         #checks to see when the last time CPV1 checked in

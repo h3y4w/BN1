@@ -9,6 +9,8 @@ from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_
 
 from datetime import datetime, timedelta
 
+
+
 class SlaveDriver (BotDriver):
     CONNECTED_TO_MASTER = False
     
@@ -21,7 +23,6 @@ class SlaveDriver (BotDriver):
 
     def __init__(self, config):
         super(SlaveDriver, self).__init__(config)
-
 
         slave_key_path = os.path.expanduser('~/.slave_key.json')
         slave_key_info = None 
@@ -41,6 +42,7 @@ class SlaveDriver (BotDriver):
                 #self.secret = slave_key_info['secret']
 
 
+        self.waiting_global_tasks = []
         self.master_server_ip = config['master_server_ip']
         self.master_server_port = config['master_server_port']
         self.PULSE_MASTER_TIMER = datetime.utcnow()
@@ -182,19 +184,38 @@ class SlaveDriver (BotDriver):
                 }
             )
             print 'Completed Global Task id {}'.format(task_id)
+
+        free_msg = create_local_task_message (
+            '@bd.instance.free',
+            {}
+        )
+
+        self.inbox.put(free_msg, INBOX_SYS_MSG)
+
         self.send_msg(task_msg1, OUTBOX_TASK_MSG)
 
 
-        if route.find('#') != -1: #checks to see if its a dynamic task
-            self.add_local_task('@bd.instance.free', {}, INBOX_SYS_MSG)
+
+
+        #if route.find('#') != -1: #checks to see if its a dynamic task
+        #    self.add_local_task('@bd.instance.free', {}, INBOX_SYS_MSG)
 
     def bd_sd_task_global_add(self, data, route_meta):
+        if self.running_instance:
+            msg = create_local_task_message(
+                'bd.@md.slave.task.reject',
+                { 'task_id': self.running_instance_task_id, 'job_id': self.running_instance_job_id }
+            )
+            self.send_message_to_master(msg)
+            return
+
         msg = create_local_task_message(
             'bd.@sd.task.global.start', 
             data,
             route_meta
         )
         self.inbox.put(msg, INBOX_TASK1_MSG)
+
 
 
     def bd_sd_task_global_stop(self, data, route_meta):

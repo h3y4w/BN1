@@ -281,6 +281,10 @@ class BotDriver(object):
         self.running_instance_job_id = None 
         self.running_instance_task_id = None
         self.running_instance_pid = None
+        if self.BOT_TYPE == 'SLAVE':
+            if len(self.waiting_global_tasks):
+                msg =  self.waiting_global_tasks.pop(0) 
+                self.inbox.put(msg, INBOX_TASK1_MSG)
 
     def bd_process_launch(self, data, route_meta):
         #DO STUFF HERE WITHIN DATA FOR PROCESSING OPTion
@@ -447,7 +451,8 @@ class BotDriver(object):
                     raise ValueError("Process could not be created!")
 
             else:
-                self.inbox.put(msg, INBOX_BLOCKING_MSG)
+                #self.inbox.put(msg, INBOX_BLOCKING_MSG)
+                self.waiting_global_tasks.append(msg)
                 #print 'Not enough resources to create instance... waiting'
                 return
        
@@ -521,7 +526,7 @@ class BotDriver(object):
 
         self.taskrunner_inbox_add(tag, data)
 
-    def taskrunner_inbox_get_tag(self, tag, poll=1, delay=.25, get_all=False):
+    def taskrunner_inbox_get_tag(self, tag, poll=1, delay=.25, get_all=False, raise_error=False, err_msg=None):
         for i in xrange(0, poll):
             if i: #delay after first poll
                 sleep(delay)
@@ -543,6 +548,10 @@ class BotDriver(object):
                         self.taskrunner_inbox.put(msg, 0) #adds back un needed tag data back to queue
             if msgs:
                 return msgs
+        if not len(msgs) and raise_error:
+            if not err_msg:
+                err_msg = 'Tag "{}" was polled until timeout'.format(tag)
+            raise Exception(err_msg)
         return msgs
 
     @staticmethod
@@ -561,9 +570,34 @@ class BotDriver(object):
         return '###{}.{}@{}'.format(self.task_id, self.taskrunner_idc, self.uuid) 
 
     def query_WCV1(self, query, tag, job_id=None, name='Querying warehouse db'):
+        if not job_id:
+            job_id = self.job_id
+
         self.add_global_task('bd.sd.@WCV1.query', {'query': query, 'tag': tag}, name, job_id=job_id)
 
-    def insert_WCV1(self, table_name, arg, job_id, tag=None):
+
+    def update_WCV1(self, table_name, arg, job_id=None):
+        if not job_id:
+            job_id = self.job_id
+
+        args = [] 
+        if arg:
+            if type(arg) == list:
+                args = arg
+
+            else:
+                args = [arg]
+
+
+        name = "Modifying {} rows in warehouse db table '{}'".format(len(args), table_name)
+        payload = {'table_name': table_name, 'args': args, 'overwrite': True}
+        self.add_global_task('bd.sd.@WCV1.model.update', payload, name, job_id=job_id)
+
+        
+    def insert_WCV1(self, table_name, arg, job_id=None, tag=None):
+        if not job_id:
+            job_id = self.job_id
+
         args = None
         if arg:
             if type(arg) == list:
@@ -572,8 +606,10 @@ class BotDriver(object):
             else:
                 args = [arg]
 
-            name = "Inserting {} rows into warehouse db".format(len(args))
-            payload = {'table_name': table_name, 'args':args, 'tag':tag}
+            name = "Inserting {} rows in warehouse db table '{}'".format(len(args), table_name)
+            payload = {'table_name': table_name, 'args':args,}
+            if tag:
+                payload['tag'] = tag
             self.add_global_task('bd.sd.@WCV1.model.insert', payload, name, job_id=job_id)
 
     def start(self):

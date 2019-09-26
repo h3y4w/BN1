@@ -11,9 +11,7 @@ os.chdir(config['lib_directory'])
 sys.path.append( config['lib_directory'])
 config['exc_dir'] = exc_dir
 
-import bot
-from slaves.access_point.slave import AccessPoint as Slave 
-
+from slaves.APTV1.slave import APTV1 as Slave 
 Slave(config).start()
 
 

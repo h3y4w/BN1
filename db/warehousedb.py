@@ -7,6 +7,18 @@ import os
 
 Base = declarative_base()
 
+class AmazonCategoryNode (Base):
+    __tablename__ = 'AmazonCategoryNode'
+    id = Column(Integer, primary_key=True)
+
+    category_node_id = Column(Integer, nullable=False, unique=True)
+    category_name = Column(String(100), nullable=False)
+
+    def __init__(self, payload):
+        self.category_node_id = payload['id']
+        self.category_name = payload['name']
+
+
 class TicketGroup (Base):
     __tablename__ = 'TicketGroup'
     id = Column(Integer, primary_key=True)

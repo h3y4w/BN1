@@ -2,7 +2,7 @@ from twisted.internet import reactor, protocol
 
 from datetime import datetime
 import json
-from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
+from utils.mpinbox import create_local_task_message, INBOX_SYS_MSG, INBOX_SYS_CRIT_MSG, INBOX_TASK1_MSG, OUTBOX_SYS_MSG, OUTBOX_TASK_MSG
 
 import traceback
 
@@ -110,22 +110,27 @@ class Echo(protocol.Protocol):
             self.send_to_inbox(data)
     
     def send_to_inbox(self, data):
-            if data['route'] == 'bd.@md.slave.connect': #create seperate func
-                self.uuid = data['data']['uuid']
-                self.factory.connections[data['data']['uuid']] = self
-            else:
-                if not self.uuid:
-                    self.transport.abortConnection()
-                    print "\n\nSLAVE IS NOT REGISTER DISCONNECTING: {} comms.server\n\n".format(self.uuid)
-                    return
-            
-            data['route_meta']['origin'] = self.uuid
-            msg = create_local_task_message(
-                data['route'],
-                data['data'],
-                data['route_meta']
-            )
-            driver.inbox.put(msg, INBOX_SYS_MSG)
+        priority = INBOX_SYS_MSG
+        if data['route'] == 'bd.@md.slave.connect': #create seperate func
+            self.uuid = data['data']['uuid']
+            self.factory.connections[data['data']['uuid']] = self
+
+        elif data['route'] == 'bd.@md.Slave.CPV1.forwarded':
+            priority = INBOX_SYS_CRIT_MSG
+
+        else:
+            if not self.uuid:
+                self.transport.abortConnection()
+                print "\n\nSLAVE IS NOT REGISTER DISCONNECTING: {} comms.server\n\n".format(self.uuid)
+                return
+        
+        data['route_meta']['origin'] = self.uuid
+        msg = create_local_task_message(
+            data['route'],
+            data['data'],
+            data['route_meta']
+        )
+        driver.inbox.put(msg, priority)
 
     def send(self, payload):
         #if self.connected:

@@ -327,7 +327,6 @@ class AlcatrazScraper (object):
         pass
 
 
-
     
     @payment_chase_iframe_scope
     def payment_get_form(self):
