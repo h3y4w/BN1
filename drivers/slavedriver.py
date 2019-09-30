@@ -20,9 +20,12 @@ class SlaveDriver (BotDriver):
     is_ec2 = False
 
     BOT_TYPE = "SLAVE"
+    global_task_waiting = False
 
     def __init__(self, config):
         super(SlaveDriver, self).__init__(config)
+
+        self.check_funcs.extend([]) 
 
         slave_key_path = os.path.expanduser('~/.slave_key.json')
         slave_key_info = None 
@@ -42,7 +45,6 @@ class SlaveDriver (BotDriver):
                 #self.secret = slave_key_info['secret']
 
 
-        self.waiting_global_tasks = []
         self.master_server_ip = config['master_server_ip']
         self.master_server_port = config['master_server_port']
         self.PULSE_MASTER_TIMER = datetime.utcnow()
@@ -56,7 +58,6 @@ class SlaveDriver (BotDriver):
             'bd.@sd.slave.auth': self.bd_sd_slave_auth,
 
             'bd.@sd.task.global.start': self.bd_sd_task_global_start,
-            'bd.@sd.task.global.add': self.bd_sd_task_global_add,
             'bd.@sd.task.global.stop': self.bd_sd_task_global_stop,
 
         }
@@ -107,7 +108,7 @@ class SlaveDriver (BotDriver):
         if self.RUNNING_GLOBAL_TASK:
             if not job_id:
                 job_id = self.job_id
-            print  "RUNNING GLOBAL_TASK"
+                print  "ADDING GLOBAL_TASK: ",
 
         print "SELF>JOB {} SELF>TASK{}\n\n\n\n".format(self.job_id, self.task_id)
 
@@ -118,7 +119,6 @@ class SlaveDriver (BotDriver):
                                               job_ok_on_error=job_ok_on_error, 
                                               retry_cnt=retry_cnt,
                                               route_meta=route_meta)
-        print msg
         self.outbox.put(msg, OUTBOX_SYS_MSG)
     
     def add_global_task_group(self, route, data, name, job_ok_on_error=False, job_id=None, route_meta=None):
@@ -138,6 +138,7 @@ class SlaveDriver (BotDriver):
         self.outbox.put(msg, OUTBOX_SYS_MSG)
 
     def bd_sd_slave_auth(self, data, route_meta):
+        self.master_uuid = data['master_uuid']
         print "Sending Authentication info to Master"
         msg = create_local_task_message(
             'bd.@md.slave.register',
@@ -148,12 +149,9 @@ class SlaveDriver (BotDriver):
         )
         self.send_msg(msg, OUTBOX_SYS_MSG)
 
-    def bd_sd_task_global_start(self, data, route_meta): #THIS FUNCTION STARTS ALL GLOBALLY TRACKED TASKS
-        task_id = route_meta["task_id"]
-        print 'Starting Global Task id {}'.format(task_id)
-        route = data['route']
-        data = data['data']
-        
+    def starting_global_task(self, data, route_meta):
+        task_id = route_meta['task_id']
+
         task_msg = create_local_task_message(
             'bd.@md.slave.task.started',
             {
@@ -161,8 +159,14 @@ class SlaveDriver (BotDriver):
                 'time_started': str(datetime.utcnow())
             }
         )
-        self.send_msg(task_msg, OUTBOX_TASK_MSG)
-        err, msg = self.router(route, json.loads(data), route_meta)
+        self.send_message_to_master(task_msg)
+
+        print 'Starting Global Task id {}'.format(task_id)
+        route = data['route']
+        route_data = data['data']
+        
+
+        err, msg = self.router(route, json.loads(route_data), route_meta)
 
         task_msg1 = None
         if err:
@@ -185,43 +189,69 @@ class SlaveDriver (BotDriver):
             )
             print 'Completed Global Task id {}'.format(task_id)
 
+        self.send_message_to_master(task_msg1)
+
         free_msg = create_local_task_message (
             '@bd.instance.free',
             {}
         )
-
         self.inbox.put(free_msg, INBOX_SYS_MSG)
 
-        self.send_msg(task_msg1, OUTBOX_TASK_MSG)
+    def router_task_process_launch(self, route, data, route_meta):
+        process_data = {
+            'data': data,
+            'route': route
+        }
+        
+        print "PROCESS_DATA: {}".format(process_data)
+        process = self.router_process_launch(self.starting_global_task, process_data,route_meta)
+
+        if process:
+            if process.pid:
+                self.running_instance = True
+
+                self.running_instance_job_id = route_meta['job_id']
+                self.running_instance_task_id = route_meta['task_id']
+                self.running_instance_pid = process.pid
+                return
+            else:
+                raise ValueError("Process id could not be got")
+
+        else:
+            raise ValueError("Process could not be created!")
 
 
+    def bd_sd_task_global_start(self, data, route_meta): #THIS FUNCTION STARTS ALL GLOBALLY TRACKED TASKS
 
+        if not self.running_instance:
+            self.router_task_process_launch(data['route'], data['data'], route_meta)
+        else:
+            self.reject_global_task(route_meta['task_id'], route_meta['job_id'])
 
-        #if route.find('#') != -1: #checks to see if its a dynamic task
-        #    self.add_local_task('@bd.instance.free', {}, INBOX_SYS_MSG)
+    def reject_global_task(self, task_id, job_id):
+        msg = create_local_task_message(
+            'bd.@md.slave.task.reject',
+            {
+                'task_id': task_id,
+                'job_id': job_id
+            }
+        )
+        self.send_message_to_master(msg)
+
 
     def bd_sd_task_global_add(self, data, route_meta):
-        if self.running_instance:
-            msg = create_local_task_message(
-                'bd.@md.slave.task.reject',
-                { 'task_id': self.running_instance_task_id, 'job_id': self.running_instance_job_id }
-            )
-            self.send_message_to_master(msg)
-            return
-
-        msg = create_local_task_message(
-            'bd.@sd.task.global.start', 
-            data,
-            route_meta
-        )
-        self.inbox.put(msg, INBOX_TASK1_MSG)
-
+        raise NotImplemented
 
 
     def bd_sd_task_global_stop(self, data, route_meta):
         if data['task_id'] == self.running_instance_task_id:
             print "Stopping task id {}".format(self.running_instance_task_id)
             self.bd_instance_free({}, route_meta)
+            out = create_local_task_message(
+                'bd.md.@slave.task.stopped',
+                {}
+            )
+            self.send_message_to_master(out)
 
     def bd_sd_task_remove(self, data, route_meta):
         pass

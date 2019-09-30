@@ -45,6 +45,9 @@ class BotDriver(object):
     bot_route_header = "bd"
     msg_id = 0
     init_start_task_funcs = []
+
+    check_loop_timer = [] 
+
     is_running = False
 
     outbox_cb = None
@@ -63,9 +66,17 @@ class BotDriver(object):
     job_id = 0
     uuid = None
     running_instance_pid = None
+    running_instance = False
+    running_instance_job_id = None
+    running_instance_task_id = None
 
     def __init__(self, config):
         self.__exc_dir__ = config['exc_dir']
+        self.check_funcs = [ 
+            [self.check_inbox, 0],
+            [self.check_msg_timers, 1000]
+        ]
+
 
         print "Init BotDriver"
         self.__bd_command_mappings = {
@@ -91,8 +102,6 @@ class BotDriver(object):
         self.msg_timers = [] 
 
         self.heartbeat_pulse_interval = 10
-
-        self.running_instance = False
 
         self.add_command_mappings(self.__bd_command_mappings)
 
@@ -273,18 +282,16 @@ class BotDriver(object):
         self.comms()
 
     def bd_instance_free(self, data, route_meta):
-        print 'Freeing instance... now'
-        if self.running_instance_pid:
+        if self.running_instance:
+            print 'Freeing instance... instance: True'
             self.bd_process_kill({'pid': self.running_instance_pid}, route_meta)
 
-        self.running_instance = False 
-        self.running_instance_job_id = None 
-        self.running_instance_task_id = None
-        self.running_instance_pid = None
-        if self.BOT_TYPE == 'SLAVE':
-            if len(self.waiting_global_tasks):
-                msg =  self.waiting_global_tasks.pop(0) 
-                self.inbox.put(msg, INBOX_TASK1_MSG)
+            self.running_instance = False 
+            self.running_instance_job_id = None 
+            self.running_instance_task_id = None
+            self.running_instance_pid = None
+        else:
+            print 'Freeing instance... instance: False'
 
     def bd_process_launch(self, data, route_meta):
         #DO STUFF HERE WITHIN DATA FOR PROCESSING OPTion
@@ -341,7 +348,7 @@ class BotDriver(object):
             self.outbox_cb.stop()
 
         self.outbox_cb = task.LoopingCall(self.check_outbox)
-        ob = self.outbox_cb.start(.1, now=False)
+        ob = self.outbox_cb.start(.01, now=False)
 
         def handle_error (reason):
             self.report_error('bd.outbox', str(reason))
@@ -429,33 +436,17 @@ class BotDriver(object):
 
         route_meta['route'] = msg['route']
 
+
+        ######MOVE EVERYTHING BELWO IF TO TASK_GLOBAL_START and launch process from main pid so global_start can still change variables
+        ################3
+        ##################
+        ##################3
+        ##################3
+
+        '''
         if msg['route'] == 'bd.@sd.task.global.start': #checks to see if global task 
     #        if msg['data']['route'].find('#') != -1:
-            if not self.running_instance:
-                print "Creating instance (DOESNT REALLY MANAGE INSTANCES ACCURATELY)"
-                func = self.command_mappings[msg['route']]
-                process = self.router_process_launch(func, msg['data'],route_meta)
-
-                if process:
-                    if process.pid:
-                        self.running_instance = True
-                        if 'job_id' in route_meta.keys():
-                            self.running_instance_job_id = route_meta['job_id']
-                        self.running_instance_task_id = route_meta['task_id'] 
-                        self.running_instance_pid = process.pid
-                        return
-                    else:
-                        raise ValueError("Process id could not be got")
-
-                else:
-                    raise ValueError("Process could not be created!")
-
-            else:
-                #self.inbox.put(msg, INBOX_BLOCKING_MSG)
-                self.waiting_global_tasks.append(msg)
-                #print 'Not enough resources to create instance... waiting'
-                return
-       
+       '''
         if 'timer' in route_meta.keys():
             self.msg_timers.append(msg)
             return
@@ -468,12 +459,10 @@ class BotDriver(object):
             self.router_process_launch(func, msg['data'],route_meta, daemon=daemon)
             return
 
+
         resp = self.router(msg['route'], msg['data'], route_meta)
         print "RESP: {}".format(resp)
 
-
-
-        pass
     def check_inbox(self):
         msg, priority = self.inbox.get(get_priority=True)
         if (msg):
@@ -612,6 +601,27 @@ class BotDriver(object):
                 payload['tag'] = tag
             self.add_global_task('bd.sd.@WCV1.model.insert', payload, name, job_id=job_id)
 
+    def loop(self):
+        timer_len = len(self.check_loop_timer) - 1
+        init_loop = False
+        if timer_len == -1:
+            init_loop = True
+
+        for i, funcd in enumerate(self.check_funcs):
+            def get_timer_ring():
+                delay = timedelta(milliseconds=funcd[1])
+                timer_ring = datetime.utcnow() + delay
+                return timer_ring
+
+            func = funcd[0]
+            if init_loop:
+                timer_ring = get_timer_ring()
+                self.check_loop_timer.append(timer_ring)
+            if i <= timer_len:
+                if self.check_loop_timer[i] <= datetime.utcnow():
+                    func()
+                    self.check_loop_timer[i] = get_timer_ring()
+
     def start(self):
         with multiprocessing.Manager() as manager:
             self.manager = manager
@@ -635,7 +645,7 @@ class BotDriver(object):
                         print "\n\n~~~~~~~~~~~~~~~~~~~~~~\nbd.check_inbox error: {}\n\n\n".format(e)
                         err_msg = 'Uncaught Master Error "{}": {}'.format(str(e), traceback.format_exc())
 
-                        self.alert_CPV1('UNCAUGHT ERROR: >>{}<<'.format(err_msg), persist=False)
+                        self.alert_CPV1('UNCAUGHT ERROR: >>{}<<'.format(err_msg), alert_color='red lighten-1', persist=True)
 
             #RIGHT HERE IS WHERE WATCHDOG RUNS THROUGH BOTS RUNNING PROCESSES AND PURGES
 

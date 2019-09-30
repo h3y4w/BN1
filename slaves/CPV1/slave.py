@@ -79,7 +79,7 @@ def set_masterconnected():
     data = request.get_json(force=True)
     master_is_connected = data['is_connected']
     
-    print "EMMINT MASTER_IS_COONNECTED: {}\n\n".format(master_is_connected)
+    print "EMIT MASTER_IS_COONNECTED: {}\n\n".format(master_is_connected)
     socketio.emit('set_is_connected_to_master', {'is_connected':master_is_connected}, namespace='/', broadcast=True)
 
     return""
@@ -159,7 +159,7 @@ def on_getall(data):
     d = { 'uuid': uuid, 'sid': request.sid} 
     msg = create_local_task_message('bd.@md.Slave.CPV1.sendall', d)
     driver.send_msg(msg, 0)
-    print "\n\n**********************GETALL!!"
+    print "\n\n**********************GETALL!!, last_UPDATE: {}".format(last_update)
 
 class CPV1(SlaveDriver):
     model_id = 'CPV1' 
@@ -241,7 +241,7 @@ class CPV1(SlaveDriver):
     def __set_isconnectedtomaster(self, is_connected):
         print "SETTING CONNECTED TO MASTER: {}\n\n\n".format(is_connected)
 
-        data = {"is_connected": is_connected}
+        data = {"is_connected": is_connected, 'uuid': self.master_uuid}
         r = requests.post(
             'http://{}:{}{}'.format(self.server_host, self.server_port, '/driver-set/master-connected'),
             data=json.dumps(data)

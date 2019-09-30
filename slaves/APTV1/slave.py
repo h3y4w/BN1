@@ -41,7 +41,7 @@ class APTV1(ScraperSlaveDriver):
         pass
 
     def test123(self, data, route_meta):
-        cnt = 5 
+        cnt = 5
         if 'cnt' in data.keys():
             cnt = data['cnt']
 
@@ -203,15 +203,29 @@ class APTV1(ScraperSlaveDriver):
                     for i in xrange(0, length):
 
                         new_node = scraped_nodes[i]
-
+                        
                         if new_node['id'] == node['category_node_id']:
+                            UPDATE_NODE = False
+                            HAS_CHILDREN_INFO = False
+
+                            if not 'name' in new_node.keys():
+                                new_node['name'] = node['category_name']
+                                HAS_CHILDREN_INFO = True
+                                if node['has_children'] != new_node['has_children']:
+                                        UPDATE_NODE = True
 
                             if node['category_name'] !=  new_node['name']:
+                                UPDATE_NODE = True
+
+                            if UPDATE_NODE:
                                 n = {
                                     'category_name': new_node['name'],
                                     'category_node_id': node['category_node_id'],
-                                    'id': node['id']
+                                    'id': node['id'],
                                 }
+                                if HAS_CHILDREN_INFO:
+                                    n['has_children'] = new_node['has_children']
+
                                 updated_nodes.append(n)
                            
                             del scraped_nodes[i] 
@@ -220,7 +234,7 @@ class APTV1(ScraperSlaveDriver):
                             if i !=0:
                                 i-=1
                             break
-
+                            
         self.insert_WCV1('AmazonCategoryNode',scraped_nodes)  
         if len(updated_nodes):
             self.update_WCV1('AmazonCategoryNode',updated_nodes)
@@ -228,19 +242,27 @@ class APTV1(ScraperSlaveDriver):
     def bd_sd_APTV1_scrape_amazon_top_nodes(self, data, route_meta):
         driver = self.create_driver()
         top_nodes = self.get_browsenodes(driver)
-        for top in top_nodes:
-            self.add_global_task (
-                'bd.sd.@APTV1.scrape.amazon.nodes',
-                {'node_id': top['id']},
-                "Searching for subcategories in '{}'".format(top['name'])
-            )
+        driver.quit()
 
         self.add_global_task (
             'bd.sd.@APTV1.merge.amazon.nodes',
             {'nodes': top_nodes},
             "Merging {} categories into warehouse db".format(len(top_nodes))
         )
-        driver.quit()
+
+        self.add_global_task (
+            'bd.sd.@APTV1.scrape.amazon.nodes',
+            {'node_id': top_nodes[0]['id']},
+            "Searching for subcategories in '{}'".format(top_nodes[0]['name'])
+        )
+
+        if 0:
+            for top in top_nodes:
+                self.add_global_task (
+                    'bd.sd.@APTV1.scrape.amazon.nodes',
+                    {'node_id': top['id']},
+                    "Searching for subcategories in '{}'".format(top['name'])
+                )
 
     def bd_sd_APTV1_scrape_amazon_nodes(self, data, route_meta):
         keys = data.keys()
@@ -252,11 +274,8 @@ class APTV1(ScraperSlaveDriver):
 
         nodes = self.get_browsenodes_all(driver, node_id=node_id)
 
-        print '\n\n\n\n\n\n\n\n\n\n\n'
-        print '==========================='
-        print nodes
         length = len(nodes)
-        print length
+
         if length:
             self.add_global_task (
                 'bd.sd.@APTV1.merge.amazon.nodes',

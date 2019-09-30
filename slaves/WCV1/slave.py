@@ -118,25 +118,23 @@ class WCV1(SlaveDriver):
         obj_type = data['obj_type']
         obj_args = data.get('obj_args')
 
-        if obj_args:
-            obj_id = obj_args.get('id')
-        
+        args = None
 
-        #args = [getattr(obj_class, key)==value for key, value in obj_args.items()]
-        #.filter(*args)\
-        
+        if obj_args:
+            args = [getattr(obj_class, key)==value for key, value in obj_args.items()]
+
+        objs_query = self.warehouse_db.session.query(model)
+
+        if args:
+            objs_query = objs_query.filter(*args)
+
         row_cnt = self.warehouse_db.session.query(model).count()
         offset = cnt*per
-        print "\n\nPER: {}".format(per)
-        print "CNT: {}".format(cnt)
-        print "offset: {}".format(offset)
-        print "========================\n\n"
-        print "ROW_CNT: {}".format(row_cnt)
 
-        objs = self.warehouse_db.session.query(model)\
-                .offset(offset)\
-                .limit(per)\
-                .all()
+        objs = objs_query\
+            .offset(offset)\
+            .limit(per)\
+            .all()
 
         dicts = [self.warehouse_db.as_json(o) for o in objs]
         out = {

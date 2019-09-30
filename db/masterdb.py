@@ -76,6 +76,7 @@ class Alert (Base):
     go_to = Column(String(50), nullable=True)
     viewed = Column(Boolean, default=False)
     time = Column(DateTime, nullable=False)
+    color = Column(String(30), nullable=True)
 
     def __init__(self, payload):
         self.msg = payload['msg']
@@ -84,6 +85,9 @@ class Alert (Base):
         cols = payload.keys()
         if 'go_to' in cols:
             self.go_to = payload['go_to']
+        if 'color' in cols:
+            self.color = payload['color']
+
 
 class SlaveTaskGroup (Base):
     __tablename__ = "SlaveTaskGroup"
@@ -96,6 +100,7 @@ class SlaveTaskGroup (Base):
     cb_name = Column(String(75), nullable=False)
     cb_data_tag = Column(String(100), nullable=True)
     grouped = Column(Boolean, default=False)
+
 
     def __init__(self, payload):
         self.total_cnt = payload['total_cnt']
@@ -150,8 +155,8 @@ class Slave (Base):
     active = Column(Boolean, default=True)
     init = Column(Boolean, default=False)
     uuid = Column(String(36))
-    tasks = relationship('SlaveTask')
     working = Column(Boolean, default=False)
+    assigned_task_id = Column(ForeignKey('SlaveTask.id'), default=None)
 
     def __init__(self, payload):
         cols = payload.keys()
@@ -237,6 +242,7 @@ class SlaveJob (Base):
     tasks = relationship("SlaveTask")
     send_alert = Column(Boolean, default=False)
     hidden = Column(Boolean, default=False)
+    task_cnt = Column(Integer, default=0)
 
     priority = Column(Integer, default=0, nullable=False)
 
@@ -287,7 +293,6 @@ class SlaveTask (Base):
     data = Column(Text, default='{}')
     slave_type_id = Column(ForeignKey('SlaveType.id'), nullable=True)
     assigned_slave_id = Column(ForeignKey('Slave.id'))
-    assigned_slave = relationship('Slave')
 
     def __init__(self, payload):
         self.time_created = datetime.utcnow()
@@ -326,9 +331,9 @@ class SlaveTask (Base):
         self.msg = msg
 
 accessible_models = [
-    [Slave, ['id', 'active', 'uuid', 'slave_type_id', 'is_ec2', 'init', 'working']],
+    [Slave, ['id', 'active', 'uuid', 'slave_type_id', 'is_ec2', 'init', 'working', 'assigned_task_id']],
     [Alert, ['id', 'msg', 'go_to', 'viewed', 'time']], 
-    [SlaveJob, ['id', 'priority', 'stage', 'msg', 'name', 'error', 'completed', 'hidden']], 
+    [SlaveJob, ['id', 'priority', 'stage', 'msg', 'name', 'error', 'completed', 'hidden', 'task_cnt']], 
     [SlaveTask,['id', 'completed', 'active', 'error', 'msg', 'job_id', 'task_group_id', 'name', 'time_created', 'time_started', 'time_completed', 'assigned_slave_id']],
     [SlaveTaskGroup,['job_id', 'id', 'total_cnt', 'completed_cnt', 'error_cnt']], 
     [SchedulerGroup,['id', 'name']],

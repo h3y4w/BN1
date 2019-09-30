@@ -13,10 +13,13 @@ class AmazonCategoryNode (Base):
 
     category_node_id = Column(Integer, nullable=False, unique=True)
     category_name = Column(String(100), nullable=False)
+    has_children = Column(Boolean, nullable=True)
 
     def __init__(self, payload):
         self.category_node_id = payload['id']
         self.category_name = payload['name']
+        if 'has_children' in payload.keys():
+            self.has_children = payload['has_children']
 
 
 class TicketGroup (Base):
